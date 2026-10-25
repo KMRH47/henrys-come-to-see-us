@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<storm>
+	<tasks>
+		<task name="abilities" class="abilities">
+			<source path="m_carbine.xml" />
+		</task>
+	</tasks>
+</storm>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="us-ascii"?>
+<database xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" name="barbora" xsi:noNamespaceSchemaLocation="../database.xsd">
+	<ammo_classs version="1">
+		<ammo_class ammo_class_id="5" ammo_class_name="Unloadable" />
+	</ammo_classs>
+</database>

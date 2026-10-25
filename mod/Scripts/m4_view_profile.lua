@@ -1,0 +1,1 @@
+M4CarbineSightProfile = {token="72fd494b3879f803fd9ad1bcbecc4c9b",rear={x=0.140397154076,y=-0.074617902452,z=0.187947916991},front={x=0.128965611263,y=0.0133479983902,z=0.555790121473},eye_relief=0.12,duration_ms=300000,aim_by_projectile=1,persistent=true,trace=false,native_alignment=true}

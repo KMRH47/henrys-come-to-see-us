@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="us-ascii"?>
+<database xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" name="barbora" xsi:noNamespaceSchemaLocation="../database.xsd">
+	<WeaponClasss version="1">
+		<MissileWeaponClass ammo_class="3 4" auto_load="false" requires_charging="false" requires_cocking="true" keep_loaded="true" keep_loaded_in_inventory="true" fire_on_hit="MisfireIfLit" loading_item_first="3c3b3ce1-f12b-4a11-afbb-89b9f3d60496" loading_item_second="1e283d52-3d33-4324-ad4c-6dc936624798" firing_item="373bb32d-ea3a-40a6-8529-db8a33aec14e" lever_animation_tag="powderFlask" loading_movement="Disable" movement_crouch="false" ammo_length="Short" battlement_offset="0" min_aim_pitch="-75" max_aim_pitch="60" min_aim_pitch_mounted="-35" max_aim_pitch_mounted="50" min_aim_yaw_mounted="-120" max_aim_yaw_mounted="30" id="13" name="rifle" skill="marksmanship" attachment_slot_id="10" equip_slot="SecondaryMainHand" in_right_hand="true" holster_slot_id="3" primary_attack_type_id="-1" secondary_attack_type_id="-1" attack_distance="30" is_blocking="false" sync_guard_distance="1.5" item_manipulation_type="54" max_attack_distance="45" collision_mode="1" anim_collision_mode="0" combat_priority="0" is_twohanded="true" sync_guard_priority="3" sharpening_zone_count="0" gender_id="3" />
+	</WeaponClasss>
+</database>

@@ -1,0 +1,20 @@
+<UIElements name="M4Carbine">
+  <UIElement name="M4Counter">
+    <GFx file="M4Counter.gfx" layer="24">
+      <Constraints>
+        <Align mode="fullscreen" />
+      </Constraints>
+    </GFx>
+    <functions>
+      <function name="SetText" funcname="fc_setText">
+        <param name="Text" desc="rounds in the magazine / rounds left" type="string" />
+      </function>
+      <function name="SetSlide" funcname="fc_setSlide">
+        <param name="Offset" desc="pixels to shift the counter from the slot it was built over" type="float" />
+      </function>
+      <function name="SetFade" funcname="fc_setFade">
+        <param name="Alpha" desc="the vanilla weapon bar's alpha, 0 to 100" type="float" />
+      </function>
+    </functions>
+  </UIElement>
+</UIElements>

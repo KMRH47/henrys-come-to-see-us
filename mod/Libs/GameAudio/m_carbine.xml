@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="us-ascii"?>
+<ATLConfig atl_name="m_carbine">
+	<AudioTriggers>
+		<ATLTrigger atl_name="c_f_m4a1_shot" path="c_w_firearms">
+			<FmodEvent fmod_id="5560045" fmod_name="event:/combat/weapons/firearms/firearm_shot" distance_culling="75" osh_preset="62" pausable="0" sword_mat="-1" sword_mat_opponent="-1" />
+		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_in_hand" path="c_w_firearms">
+		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_out_of_hand" path="c_w_firearms">
+		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_other_in_hand" path="c_w_firearms">
+		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_other_out_of_hand" path="c_w_firearms">
+		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_frame" path="c_w_firearms">
+		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_frame_mounted" path="c_w_firearms">
+		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_reload_out" path="c_w_firearms">
+		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_reload_in" path="c_w_firearms">
+		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_reload_in2" path="c_w_firearms">
+		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_reload_assist" path="c_w_firearms">
+		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_reload_catch" path="c_w_firearms">
+		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_drop_grass" path="c_w_firearms">
+		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_drop_rock" path="c_w_firearms">
+		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_drop_wood" path="c_w_firearms">
+		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_drop_metal" path="c_w_firearms">
+		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_drop_plants" path="c_w_firearms">
+		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_drop_glass" path="c_w_firearms">
+		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_drop_cloth" path="c_w_firearms">
+		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_drop_water" path="c_w_firearms">
+		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_light" path="c_w_firearms">
+		</ATLTrigger>
+	</AudioTriggers>
+</ATLConfig>

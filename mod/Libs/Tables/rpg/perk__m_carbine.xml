@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="us-ascii"?>
+<database xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" name="barbora" xsi:noNamespaceSchemaLocation="../database.xsd">
+	<perks version="1">
+		<perk autolearnable="false" icon_id="perk_enthusiast" perk_id="e8b9d4c1-2345-5678-9abc-def012345678" perk_name="m_carbine_fastfire" perk_ui_name="ui_perk_m_carbine_fastfire" perk_ui_desc="ui_perk_m_carbine_fastfire_desc" visibility="2" />
+	</perks>
+</database>

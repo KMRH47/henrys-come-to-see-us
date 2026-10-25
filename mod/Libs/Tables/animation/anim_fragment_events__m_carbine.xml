@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="us-ascii"?>
+<database xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" name="barbora" xsi:noNamespaceSchemaLocation="../database.xsd">
+	<anim_fragment_eventss version="14">
+		<anim_fragment_events abs_event_time="0.425167" actor_class_hash="1578932418" event_name="DespawnHelper" mn_fragment_id="LoadToIdle" mn_option_index="0" mn_tags="r_rifle+m4hold" norm_event_time="0.2406604" timestamp="-6658030608044785664" />
+		<anim_fragment_events abs_event_time="0.425167" actor_class_hash="1578932418" event_name="DespawnHelper" mn_fragment_id="LoadToIdle" mn_option_index="0" mn_tags="r_rifle+player+m4hold" norm_event_time="0.2406604" timestamp="-6658030608044785664" />
+		<anim_fragment_events abs_event_time="0.45" actor_class_hash="1578932418" event_name="Charged" mn_fragment_id="Charge" mn_option_index="0" mn_tags="r_rifle+player+prime+m4hold+transitionFromIdle" norm_event_time="0.16875" timestamp="-6658030608044785664" />
+		<anim_fragment_events abs_event_time="0.809" actor_class_hash="1578932418" event_name="Detach" mn_fragment_id="HolsterWeapon" mn_option_index="0" mn_tags="r_rifle+player+m4a1" norm_event_time="0.655946" timestamp="-6658030608044785664" />
+		<anim_fragment_events abs_event_time="0.809" actor_class_hash="1578932418" event_name="Detach" mn_fragment_id="HolsterWeapon" mn_option_index="0" mn_tags="stealth+r_rifle+m4a1" norm_event_time="0.655946" timestamp="-6658030608044785664" />
+		<anim_fragment_events abs_event_time="0.4243" actor_class_hash="1578932418" event_name="Attach" mn_fragment_id="DrawWeapon" mn_option_index="0" mn_tags="player+m4a1+r_pick_rifle" norm_event_time="0.223333" timestamp="-6658030608044785664" />
+		<anim_fragment_events abs_event_time="0.4243" actor_class_hash="1578932418" event_name="Attach" mn_fragment_id="DrawWeapon" mn_option_index="0" mn_tags="stealth+m4a1+r_pick_rifle" norm_event_time="0.223333" timestamp="-6658030608044785664" />
+	</anim_fragment_eventss>
+</database>
