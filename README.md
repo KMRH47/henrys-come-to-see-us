@@ -1,6 +1,4 @@
-# Henry's Come to See Us!
-
-A full auto M4A1 carbine for Kingdom Come: Deliverance II.
+<img src="docs/card.svg" width="100%" alt="Henry's Come to See Us!, an M4A1 for Kingdom Come: Deliverance II, with its rifle and magazine, how it reloads, and the kcd2-forge CLI it is built with.">
 
 Download the playable mod from Nexus Mods:
 https://www.nexusmods.com/kingdomcomedeliverance2/mods/3886
