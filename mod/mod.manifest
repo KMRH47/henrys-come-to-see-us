@@ -5,7 +5,7 @@
         <modid>m_carbine</modid>
         <description>Adds an M4A1 carbine with full auto, 5.56 ammo, reloads and a weapon light.</description>
         <author>kmrh47</author>
-        <version>1</version>
+        <version>2</version>
         <created_on>19.05.2026</created_on>
         <modifies_level>false</modifies_level>
     </info>

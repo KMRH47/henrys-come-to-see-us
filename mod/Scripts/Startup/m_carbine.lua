@@ -90,7 +90,7 @@ end
 -- The silent frame mark tells the plugin each frame boundary, so full-auto
 -- presses are counted in frames and every shot lands the same frames apart.
 -- In the saddle the mounted mark lets the plugin reload on the move there only.
-M4Carbine.props = {names = {"powder_flask", "rifle_ignition", "rifle_ramrod"}, radius = 2, before = {}}
+M4Carbine.props = {names = {"powder_flask", "rifle_ignition", "rifle_ramrod"}, radius = 2, before = {}, every = 0.5, at = nil}
 
 function M4Carbine.MarkProps(player)
 	M4Carbine.props.before = {}
@@ -100,12 +100,16 @@ function M4Carbine.MarkProps(player)
 end
 
 function M4Carbine.HideProps(player)
-	for _, entity in pairs(System.GetEntitiesInSphere(player:GetWorldPos(), M4Carbine.props.radius) or {}) do
-		if not M4Carbine.props.before[entity.id] and not entity:IsHidden() then
+	local props, now = M4Carbine.props, M4Carbine.Now()
+	if props.at and now - props.at >= 0 and now - props.at < props.every then return end
+	props.at = now
+	for _, entity in pairs(System.GetEntitiesInSphere(player:GetWorldPos(), props.radius) or {}) do
+		if not props.before[entity.id] and not entity:IsHidden() then
 			local name = entity:GetName()
-			for _, prop in ipairs(M4Carbine.props.names) do
+			for _, prop in ipairs(props.names) do
 				if string.find(name, prop, 1, true) == 1 then
 					entity:Hide(1)
+					System.LogAlways("M4CARBINE prop hidden " .. tostring(name))
 					break
 				end
 			end
@@ -2527,7 +2531,7 @@ function M4Carbine.StarterKit()
 	local inventory = M4Carbine.Dude().inventory
 	starter.done = true
 	local ok, given = pcall(Variables.GetGlobal, starter.saved)
-	local first = not (ok and tonumber(given) == 1)
+	local first = not (ok and tonumber(given) == 1) or (inventory:GetCountOfClass(M4Carbine.flash.ammo) or 0) == 0
 	if (inventory:GetCountOfClass(M4Carbine.itemClass) or 0) == 0 then
 		inventory:CreateItem(M4Carbine.itemClass, 1, 1)
 		M4Carbine.back.dirty = true
@@ -2643,14 +2647,29 @@ function M4Carbine.TwinBack(back)
 	System.LogAlways("M4CARBINE twin back slot set")
 end
 
-M4Carbine.doll = {clips = {"rifle_idle_loaded", "rifle_walk_jump_rleg_start"}, layers = {8, 9}, on = {}}
+M4Carbine.doll = {clips = {"rifle_idle_loaded", "rifle_walk_jump_rleg_start"}, layers = {8, 9}, on = {}, found = nil, scanAt = nil, scanSeconds = 1}
 
 local function dollItem(dummy) return ItemManager.GetItem(dummy.human:GetItemInHand(0)) end
+
+function M4Carbine.DollDummies()
+	local doll, now = M4Carbine.doll, M4Carbine.Now()
+	if doll.found then
+		for _, dummy in ipairs(doll.found) do
+			if System.GetEntity(dummy.id) == nil then doll.found = nil; break end
+		end
+	end
+	if not doll.found and (not doll.scanAt or math.abs(now - doll.scanAt) >= doll.scanSeconds) then
+		doll.scanAt = now
+		local found = System.GetEntitiesByClass("InventoryDummyPlayer") or {}
+		doll.found = #found > 0 and found or nil
+	end
+	return doll.found or {}
+end
 
 function M4Carbine.DollTick()
 	local doll = M4Carbine.doll
 	local open = false
-	for _, dummy in ipairs(System.GetEntitiesByClass("InventoryDummyPlayer") or {}) do
+	for _, dummy in ipairs(M4Carbine.DollDummies()) do
 		local hidden = dummy:IsHidden()
 		open = open or not hidden
 		local key = tostring(dummy.id)
@@ -2687,10 +2706,13 @@ function M4Carbine.OverlayReloaded(reason)
 	overlay.drawnSince = nil
 	overlay.pressAt = nil
 	M4Carbine.inHand = nil -- a load drops the non-persistent M4 buff; the next frame adds it back
-	M4Carbine.counter.shown, M4Carbine.counter.barKnown = false, false
+	M4Carbine.CounterHide()
+	M4Carbine.counter.barKnown = false
 	M4Carbine.finger.held, M4Carbine.finger.on, M4Carbine.finger.playing, M4Carbine.tap.at = false, false, false, -1
 	M4Carbine.trigger.w, M4Carbine.trigger.entity, M4Carbine.trigger.drawn = 0, nil, {}
 	M4Carbine.back.dirty = true
+	M4Carbine.doll.found, M4Carbine.doll.scanAt = nil, nil
+	M4Carbine.props.at = nil
 	M4Carbine.UnparkAmmo()
 	M4Carbine.starter.done, M4Carbine.starter.at = false, nil
 	M4Carbine.headshot.seq = nil

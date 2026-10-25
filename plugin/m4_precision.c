@@ -110,6 +110,7 @@ typedef struct {
 #define KEEP_RADIUS_SQUARED 2.25f
 #define SHIFTS 64
 #define SHIFT_FRAMES 2
+#define SHIFT_PROBE 8
 #define SHIFT_READ_TRIES 64
 #define PASS_SCAN_BYTES 0x100
 #define PASS_SCAN_LIMIT 600
@@ -204,9 +205,10 @@ static LONG sight_rowed;
 static volatile LONG stale_total;
 static FILE *row_file;
 extern char game_root[MAX_PATH];
-static LONG sight_active, sight_steady, sight_frame = -1;
+static LONG sight_active, sight_steady, sight_frame = -1, sight_none = -1;
 static volatile LONG sight_lock, sight_frames, sight_learned, sight_skins, sight_kind, sight_stance;
 static volatile LONG sight_off, sight_shooting, sight_turning, sight_swinging, sight_mounted, sight_followed, sight_walking, sight_flips, sight_stale;
+static volatile LONG gun_lost_skins, gun_bare_skins, gun_rescued_skins, shift_full;
 static volatile LONG follow_same, follow_late, first_gun, first_body, body_waited, body_gave_up, body_on_gun_thread, body_refixed;
 static volatile DWORD gun_thread;
 static double body_wait_peak, saddle_kick, saddle_kick_from, saddle_last_shot_ms = 1e12, saddle_reach, saddle_turned_at = -1e12;
@@ -288,14 +290,26 @@ static int to_local(const float *m, const double *world, float *local) {
     return 1;
 }
 
-static skin_shift *shift_for(const void *instance) {
-    return &shifts[((ULONG_PTR)instance * 0x9e3779b97f4a7c15ull) >> 58];
+static skin_shift *shift_for(const void *instance, int claim) {
+    ULONG_PTR home = ((ULONG_PTR)instance * 0x9e3779b97f4a7c15ull) >> 58;
+    LONG frame = camera_frame;
+    skin_shift *open = NULL;
+    for (int i = 0; i < SHIFT_PROBE; i++) {
+        skin_shift *entry = &shifts[(home + i) % SHIFTS];
+        if (entry->instance == instance) return entry;
+        if (claim && !open && (!entry->seq || frame - entry->frame > SHIFT_FRAMES)) open = entry;
+    }
+    return open;
 }
 
 static void store_shift(void *instance, const float *local, LONG kind, const float *sight) {
-    skin_shift *entry = shift_for(instance);
+    skin_shift *entry = shift_for(instance, 1);
+    if (!entry) {
+        InterlockedIncrement(&shift_full);
+        return;
+    }
     LONG frame = camera_frame, seq = entry->seq;
-    if (seq && !(seq & 1) && entry->instance == instance && entry->frame == frame) return;
+    if (seq && !(seq & 1) && entry->instance == instance && entry->frame == frame && (entry->sighted || !sight)) return;
     if ((seq & 1) || InterlockedCompareExchange(&entry->seq, seq + 1, seq) != seq) return;
     entry->instance = instance;
     for (int i = 0; i < 3; i++) entry->shift[i] = local[i];
@@ -307,7 +321,8 @@ static void store_shift(void *instance, const float *local, LONG kind, const flo
 }
 
 static int shift_of(const void *instance, float *shift, LONG *kind, float *sight, LONG *sighted, LONG *age) {
-    skin_shift *entry = shift_for(instance);
+    skin_shift *entry = shift_for(instance, 0);
+    if (!entry) return 0;
     for (int tries = 0; tries < SHIFT_READ_TRIES; tries++) {
         LONG seq = entry->seq;
         if (!seq) return 0;
@@ -788,6 +803,7 @@ static int sight_of(const float *m, const float *view, const float *at, const fl
         ok = 1;
     }
     if (ok) memcpy(out, sight_cached, sizeof(sight_cached));
+    else if (instance == sight_instance) sight_none = frame;
     if (follow_tried == frame) refix_bodies(frame);
     InterlockedExchange(&sight_lock, 0);
     return ok;
@@ -963,13 +979,31 @@ static void refix_bodies(LONG frame) {
     if (follow_picked_frame == frame) follow_picked = follow_frames[frame & 1] == frame ? frame : -1;
 }
 
+static int sight_rescue(const void *instance, float *sight) {
+    while (InterlockedCompareExchange(&sight_lock, 1, 0)) YieldProcessor();
+    LONG frame = camera_frame;
+    int ok = instance == sight_instance && sight_frame > sight_none && frame - sight_frame <= SHIFT_FRAMES;
+    if (ok) memcpy(sight, sight_cached, sizeof(sight_cached));
+    InterlockedExchange(&sight_lock, 0);
+    return ok;
+}
+
 static void skinning_computed(unsigned char *context, const unsigned char *skinning) {
     skinning_computation(context);
     InterlockedIncrement(&skins);
     float d[3], sight[8];
     LONG kind, sighted, age;
     void *instance = *(unsigned char **)(context + CONTEXT_INSTANCE_PLUS_8) - 8;
-    if (!shift_of(instance, d, &kind, sight, &sighted, &age) || kind < SHIFT_GUN || kind > SHIFT_BODY) return;
+    int found = shift_of(instance, d, &kind, sight, &sighted, &age) && kind >= SHIFT_GUN && kind <= SHIFT_BODY;
+    if (instance == sight_instance && (m4_precision & PRECISION_SIGHT) && tag_armed && (!found || !sighted)) {
+        InterlockedIncrement(found ? &gun_bare_skins : &gun_lost_skins);
+        if (sight_rescue(instance, sight)) {
+            InterlockedIncrement(&gun_rescued_skins);
+            if (!found) d[0] = d[1] = d[2] = 0, kind = SHIFT_GUN, age = 0, found = 1;
+            sighted = 1;
+        }
+    }
+    if (!found) return;
     void *skeleton = *(void **)(context + CONTEXT_SKELETON);
     UINT32 joints = ((UINT32 (*)(void *))(*(void ***)skeleton)[SKELETON_JOINT_COUNT_SLOT])(skeleton);
     float *quat = *(float **)(context + CONTEXT_BONE_QUATS);
@@ -1092,6 +1126,8 @@ static void report(void) {
     LONG body_first = InterlockedExchange(&first_body, 0), waited = InterlockedExchange(&body_waited, 0);
     LONG gave_up = InterlockedExchange(&body_gave_up, 0), gun_thread_bodies = InterlockedExchange(&body_on_gun_thread, 0),
          refixed = InterlockedExchange(&body_refixed, 0);
+    LONG gun_lost_n = InterlockedExchange(&gun_lost_skins, 0), gun_bare_n = InterlockedExchange(&gun_bare_skins, 0),
+         gun_rescued_n = InterlockedExchange(&gun_rescued_skins, 0), full = InterlockedExchange(&shift_full, 0);
     double wait_peak = body_wait_peak;
     body_wait_peak = 0;
     double fixed_peak = sight_fixed_peak, learned_peak = sight_learned_peak;
@@ -1120,10 +1156,10 @@ static void report(void) {
              "sight: frames %ld skins %ld learned %ld bins %d | learned frames raw mrad rear %.2f %.2f front %.2f %.2f"
              " | fixed rear %.2f %.2f front %.2f %.2f, front sway x %.2f y %.2f | not learned: off %ld shot %ld turning %ld swinging %ld"
              " mounted %ld | turn followed %ld, front peak mrad fixed %.2f learned only %.2f, body carried %ld one frame late %ld, waited %ld gave up %ld on the gun thread %ld refixed %ld peak %.3f ms,"
-             " first skin gun %ld body %ld | walking %ld camera-only moves %ld stale skins %ld | applied %.3f deg %.2f mm | pitch %.1f kind %ld stance %ld scale %.4f | joint0 %.3f deg %.2f mm | fov %.4f",
+             " first skin gun %ld body %ld | walking %ld camera-only moves %ld stale skins %ld | gun skins lost %ld bare %ld rescued %ld table full %ld | applied %.3f deg %.2f mm | pitch %.1f kind %ld stance %ld scale %.4f | joint0 %.3f deg %.2f mm | fov %.4f",
              (long)frames, (long)sight_skinned, (long)learned, bins, mean[0], mean[1], mean[2], mean[3], mean[4], mean[5], mean[6],
              mean[7], sway[0], sway[1], (long)off, (long)shooting, (long)turning, (long)swinging, (long)mounted, (long)followed,
-             fixed_peak, learned_peak, (long)carried, (long)late, (long)waited, (long)gave_up, (long)gun_thread_bodies, (long)refixed, wait_peak * 1000, (long)gun_first, (long)body_first, (long)walking, (long)flips, (long)stale, sight_turn, sight_move,
+             fixed_peak, learned_peak, (long)carried, (long)late, (long)waited, (long)gave_up, (long)gun_thread_bodies, (long)refixed, wait_peak * 1000, (long)gun_first, (long)body_first, (long)walking, (long)flips, (long)stale, (long)gun_lost_n, (long)gun_bare_n, (long)gun_rescued_n, (long)full, sight_turn, sight_move,
              sight_pitch, (long)sight_kind, (long)sight_stance, sight_scale, joint_turn, joint_mm, sight_view[0]);
     note(line);
     sight_trace traces[SIGHT_TRACE_FRAMES];

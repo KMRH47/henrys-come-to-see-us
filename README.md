@@ -2,7 +2,7 @@
 
 ## Download
 
-**[Download henrys-come-to-see-us-1.zip](https://github.com/KMRH47/henrys-come-to-see-us/releases/download/v1/henrys-come-to-see-us-1.zip)**
+**[Download henrys-come-to-see-us-2.zip](https://github.com/KMRH47/henrys-come-to-see-us/releases/download/v2/henrys-come-to-see-us-2.zip)**
 
 Unzip it and run `install_windows.bat` on Windows or `install_linux.sh` on Linux.
 The mod page is on [Nexus Mods](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3886).
