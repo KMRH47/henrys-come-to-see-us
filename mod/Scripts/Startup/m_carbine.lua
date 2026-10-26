@@ -2523,6 +2523,31 @@ M4Carbine.parkedAmmo = {["a90feb23-dbd1-4144-b139-c97712b059bb"] = "f10ded12-a41
 
 M4Carbine.starter = {saved = "m4_starter_kit", rounds = 300, wait = 3, at = nil, done = false}
 
+function M4Carbine.Give(item, amount, extra)
+	local items = {gun = {id = M4Carbine.itemClass, default = 1, label = "M4A1"}, ammo = {id = M4Carbine.flash.ammo, default = 100, label = "5.56 rounds"}}
+	local selected = items[string.lower(tostring(item or ""))]
+	local count = amount == nil and selected and selected.default or tonumber(amount)
+	if not selected or not count or count < 1 or count > 10000 or count ~= math.floor(count) or extra ~= nil then
+		System.LogAlways("Usage: m4_give gun|ammo [quantity] (1-10000)")
+		return
+	end
+	local player = M4Carbine.Dude()
+	if not player or not player.inventory then
+		System.LogAlways("M4CARBINE load a save before using m4_give")
+		return
+	end
+	player.inventory:CreateItem(selected.id, 1, count)
+	if selected.id == M4Carbine.itemClass then M4Carbine.back.dirty = true end
+	local message = string.format("Added %d %s to your inventory", count, selected.label)
+	pcall(UIAction.CallFunction, "hud", -1, "ShowInfoText", message, 1, 6000, false)
+	System.LogAlways("M4CARBINE " .. message)
+end
+
+function M4Carbine.RegisterCommands()
+	if type(System.AddCCommand) ~= "function" then return end
+	System.AddCCommand("m4_give", "M4Carbine.Give(%%)", "m4_give gun|ammo [quantity]: add M4s or 5.56 rounds")
+end
+
 function M4Carbine.StarterKit()
 	local starter = M4Carbine.starter
 	if starter.done then return end
@@ -2831,6 +2856,7 @@ function Startup:M4Carbine()
 end
 
 System.LogAlways("M4CARBINE script loaded, attach " .. tostring(M4Carbine.Attach()))
+M4Carbine.RegisterCommands()
 -- The tick used to start on the first key press, so a loaded save showed the
 -- vanilla hold until then (A343).
 M4Carbine.EnsureOverlay()
