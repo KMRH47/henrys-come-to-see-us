@@ -1,4 +1,10 @@
-<img src="docs/card.svg" width="100%" alt="Henry's Come to See Us!, an M4A1 for Kingdom Come: Deliverance II, with its rifle and magazine, how it reloads, and the kcd2-forge CLI it is built with.">
+<p align="center"><img src="docs/page/banner.png" width="850" alt="Henry&#x27;s Come to See Us!, an M4A1 for Kingdom Come: Deliverance II."><br>
+<img src="docs/page/notice.png" width="850" alt="Version 6, The Red Dot Sight: Fit it to any M4, take it off again. Each gun keeps its own."><br>
+<img src="docs/page/panels.png" width="850" alt="How to install and remove the mod, what it is compatible with, and the M4A1, 5.56 magazine and red dot sight in the game."><br>
+<img src="docs/page/features.png" width="850" alt="What the M4 does in the game."><br>
+<img src="docs/page/commands.png" width="850" alt="Console commands that give the M4, its ammunition and its sights."><br>
+<img src="docs/page/gallery.png" width="850" alt="Pictures from the game."><br>
+<img src="docs/page/forge.png" width="850" alt="Built with kcd2-forge, the CLI and studio the mod is made with."></p>
 
 ## Download
 
@@ -7,9 +13,9 @@
 Unzip it and run `install_windows.bat` on Windows or `install_linux.sh` on Linux.
 The mod page is on [Nexus Mods](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3886).
 
-This repo holds the parts of the mod that were made for it.
-
 ## What is here
+
+This repo holds the parts of the mod that were made for it.
 
 | Folder | What it holds |
 |---|---|
