@@ -567,7 +567,7 @@ function M4Carbine.TriggerTick()
 	gun:SetSlotAngles(trigger.slot, {x = a.x * w, y = a.y * w, z = a.z * w})
 end
 
-M4Carbine.light = {glow = "m4_light_glow", characters = {0, 2}, lampSlot = 8, pos = {x = 0.0920367, y = 0.0835886, z = 0.5769692}, angles = {x = 0.0, y = -1.3341623, z = 1.6999993}, keys = {attack_special = true, grab_body = true, stealth_kill = true, knock_out = true, horse_pulldown = true, mercy_kill = true, butcher = true}, debounce = 0.15, pressAt = -1, switchAt = -1, on = false, lit = nil, archetype = "Lights.Standard.Light_Lantern", texture = "textures/projectors/round_02_diff.dds", radius = 25, fov = 50, colour = {x = 1, y = 0.95, z = 0.86}, power = 1.5, fog = 1}
+M4Carbine.light = {glow = "m4_light_glow", characters = {0, 2}, lampSlot = 8, pos = {x = 0.0920367, y = 0.0835886, z = 0.5769692}, angles = {x = 0.0, y = -1.3341623, z = 1.6999993}, keys = {attack_special = true, grab_body = true, stealth_kill = true, knock_out = true, horse_pulldown = true, mercy_kill = true, butcher = true}, debounce = 0.15, hipWait = 0.3, pressAt = -1, switchAt = -1, on = false, lit = nil, archetype = "Lights.Standard.Light_Lantern", texture = "textures/projectors/round_02_diff.dds", radius = 25, fov = 50, colour = {x = 1, y = 0.95, z = 0.86}, power = 1.5, fog = 1}
 
 function M4Carbine.LightGlow(gun, on)
 	local light = M4Carbine.light
@@ -576,10 +576,31 @@ end
 
 function M4Carbine.LightPress(action, activation)
 	local light = M4Carbine.light
-	if activation ~= "press" or not light.keys[action] or not (M4Carbine.inHand and M4Carbine.overlay.aimHeld) then return end
+	if activation ~= "press" or not light.keys[action] or not M4Carbine.inHand then return end
 	local now = M4Carbine.Now()
 	if now - light.pressAt < light.debounce then return end
-	light.pressAt, light.on, light.switchAt = now, not light.on, now
+	light.pressAt = now
+	if M4Carbine.overlay.aimHeld then return M4Carbine.LightSwitch(action, now) end
+	M4Carbine.LightHip(action, "press")
+	M4Carbine.At(light.hipWait, function()
+		if M4Carbine.LightHip(action, "check") then M4Carbine.LightSwitch(action, M4Carbine.Now()) end
+	end)
+end
+
+-- F at the hip also starts takedowns, so the light switches only when the M4
+-- hold is still up hipWait after the press.
+function M4Carbine.LightHip(action, when)
+	local player, overlay = M4Carbine.Dude(), M4Carbine.overlay
+	local drawn = player and player.human and player.human:IsWeaponDrawn() or false
+	local free = M4Carbine.inHand and drawn and overlay.state == "on" and not overlay.aimHeld and not overlay.holstering
+	System.LogAlways(string.format("M4LIGHT hip %s %s drawn=%s state=%s idle=%s free=%s", when, action, tostring(drawn),
+		tostring(overlay.state), tostring(overlay.idleClip), tostring(free)))
+	return free
+end
+
+function M4Carbine.LightSwitch(action, now)
+	local light = M4Carbine.light
+	light.on, light.switchAt = not light.on, now
 	if M4Carbine.FingerAimed() then
 		local tap = M4Carbine.tap
 		tap.at, light.switchAt = now, now + tap.liftFor + tap.pressFor
@@ -1000,7 +1021,7 @@ end
 function M4Carbine.MagModelEnd(gun)
 	local model = M4Carbine.magModel
 	local now, catch = M4Carbine.Now(), model.catch
-	if M4Carbine.inHand and model.chatAt and now - model.chatAt < model.chatHold then
+	if M4Carbine.inHand and model.chatAt and now - model.chatAt < model.chatHold and not M4Carbine.overlay.aimHeld then
 		if not model.held then System.LogAlways("M4CARBINE reload end held for a talk") end
 		model.held = true
 		return
@@ -1519,7 +1540,7 @@ end
 -- one several times a second. The skeleton box top splits them: running it stays
 -- at 1.76 m or above, crouch walking at 1.72 m or below (logger 2026-10-02).
 M4Carbine.overlay = {clip = "rifle_walk_jump_rleg_start", crouchClip = "rifle_walk_jump_rleg_start_over", mountClip = "rifle_run_jump_rleg_land", mountAimClip = "photomode_tracking", mountGridClip = "photomode_victorious_01", mountEyeClip = "photomode_victorious_02", mountGrid = {yaws = 641, pitches = 25, downs = 1, down = 0, downStep = 0.6, rolls = 1, rollStep = 4, rollSpan = 0, rollRef = 66, rollSign = 0, roll = 0, yawStep = 0.05, pitchStep = 2.5, yawSpan = 16, pitchSpan = 30, gain = 0, steer = true, steerPole = 0.3, steerRamp = 0.25, hold = 0, aimYaw = -0.05, aimPitch = -0.05, camDrop = -0.05, camYaw = -0.05, camJump = 6, camHoldMax = 2, camHeld = 0, camMove = 0.003, camSettle = 0.3, eye = {pole = 0.3, layer = 13, rows = 801, planes = 9, plane = 4, span = 0.04, step = 0.0001, right = {x = 0.022495, y = 0.997421, z = 0.068151}, up = {x = 0.985039, y = -0.010463, z = -0.172012}}}, mountFix = nil, crouchHips = 0.70, crouchTop = 1.74, standHips = 0.8, crouchWindow = 0.6, crouchDipAt = -1, airHips = 0.95, landing = false, landLow = 0, landRise = 0.02, crouchFloor = 0.53, stanceBlend = 0.2, lastHips = nil, snapAt = -1, idleClip = nil, aimClip = "rifle_walk_jump_rleg_land", crouchAimClip = "rifle_walk_jump_rleg_land_over", aimPlaying = nil,
-	standStance = "rifle_walk_jump_lleg_start_over", crouchStance = "rifle_walk_jump_lleg_land_over", stanceSpeed = 0.01, stanceDelay = 0.1, stanceTop = 0.78, stanceBottom = 0.52, stanceWalkTop = 0.75, stanceWalkBottom = 0.66, stillAfter = 0.3, movedAt = -1, stanceSlew = 0.1, shiftRise = 0.35, shiftHold = 0.3, shiftAt = -1, stancePressAt = -1, pressWindow = 1, riseLast = nil, gunFix = 0, gunRef = nil, gunGain = 0.7, gunMax = 15, gunFade = 20, stanceRamp = 0.15, stanceW = 0, stanceSteps = 97, clipKeys = 784, twistMax = 135, twistRate = 2400, twistDead = 1, twistBand = 2, twistWalkDead = 15, twistFull = false, twist = 0, hipsRef = {rifle_walk_jump_lleg_start_over = 64.5, rifle_walk_jump_lleg_start = 64.5, rifle_walk_jump_lleg_land_over = 56.7}, twistStable = 0, hipsLast = nil,
+	standStance = "rifle_walk_jump_lleg_start_over", crouchStance = "rifle_walk_jump_lleg_land_over", stanceSpeed = 0.01, stanceDelay = 0.1, stanceTop = 0.78, stanceBottom = 0.52, stanceWalkTop = 0.75, stanceWalkBottom = 0.66, stillAfter = 0.3, movedAt = -1, stanceSlew = 0.1, shiftRise = 0.35, shiftHold = 0.3, shiftAt = -1, stancePressAt = -1, pressWindow = 1, riseLast = nil, gunFix = 0, gunRef = nil, gunGain = 0.7, gunMax = 15, gunFade = 20, stanceRamp = 0.15, stanceW = 0, stanceSteps = 97, clipKeys = 784, twistMax = 135, twistRate = 2400, twistDead = 1, twistBand = 2, twistWalkDead = 15, twistFull = false, twist = 0, twistStandW = 0.5, hipsRef = {rifle_walk_jump_lleg_start_over = 64.5, rifle_walk_jump_lleg_start = 64.5, rifle_walk_jump_lleg_land_over = 56.7}, twistStable = 0, hipsLast = nil,
 	gridSteps = 28, gridTurns = 8, gridKeys = 1008, raiseP = 0, gridDir = 0, twistW = 0, twistIn = 0.05, gridLive = true, gridAt = -1, gridWait = 0.15, blank = "blank", layer = 9,
 	drawSeconds = 1.02, drawGrace = 0.1, drawBlend = 0, drawPlateau = 0.6, drawFade = 0.2, drawTailSpeed = 4, drawAimSpeed = 2, drawAimBlend = 0.15, blockHeld = false, aimGuess = false, aimGuessSeconds = 0.6, drawHiddenSpeed = 10, drawSped = false, drawRushed = false, rmb = false, drawRunning = false, drawOwed = false, onUntil = 0, aimHold = 0.05, aimBlend = 0.2, holsterBlend = 0.05, raiseClip = "rifle_walk_jump_lleg_start", lowerClip = "rifle_walk_jump_lleg_land", clipSeconds = 2, raiseSeconds = 0.18, crouchRaiseSeconds = 0.25, raiseHandoff = 0.1, lowerSeconds = 0.45, raiseAt = -1, lowerAt = -1, loaded = false,
 	disabled = false, state = nil, fadeToken = 0, holdUntil = 0, aimHeld = false, drawnSince = nil, pressAt = nil, drawStartAt = nil, holstering = false, holsterAsk = nil, itemLayer = 6, tickAt = -1, health = nil}
@@ -1702,7 +1723,7 @@ function M4Carbine.Twist(player, own, w)
 		elseif math.abs(off) < overlay.twistDead then
 			overlay.twistFull = false
 		end
-		local dead = overlay.twistFull and overlay.twistDead or overlay.twistWalkDead
+		local dead = (overlay.twistFull or overlay.stanceW < overlay.twistStandW) and overlay.twistDead or overlay.twistWalkDead
 		local keep = clamp((dead + overlay.twistBand - math.abs(off)) / overlay.twistBand, 0, 1)
 		target = share * clamp(clamp(off, -dead, dead) * keep - off, 3 - overlay.twistMax, overlay.twistMax - 3)
 	end
@@ -2056,7 +2077,8 @@ end
 -- gait keeps the mounted hold while the body still rides.
 function M4Carbine.IdleClip()
 	if M4Carbine.Mounted() then return M4Carbine.overlay.mountClip end
-	return M4Carbine.Crouched() and M4Carbine.overlay.crouchClip or M4Carbine.overlay.clip
+	if M4Carbine.Crouched() then return M4Carbine.overlay.crouchClip end
+	return M4Carbine.overlay.clip
 end
 
 function M4Carbine.OverlayWanted(player)
@@ -2319,7 +2341,8 @@ function M4Carbine.OverlayLower()
 		-- unturned lower clip with no blend: an 81 deg turn dropped in one frame,
 		-- 25 cm (M4QUIRK 2026-10-06). The grid's last step is the same aim hold
 		-- turned, so it lowers there and unturns with the raise.
-		if overlay.aimPlaying == overlay.standStance and overlay.stanceW < 0.001 and overlay.idleClip ~= overlay.crouchClip then
+		local grid = overlay.idleClip ~= overlay.crouchClip
+		if overlay.aimPlaying == overlay.standStance and overlay.stanceW < 0.001 and grid then
 			M4Carbine.StartGrid(player)
 			overlay.aimPlaying, overlay.raiseP = overlay.raiseClip, 1
 			overlay.gridDir = -1
@@ -2327,7 +2350,7 @@ function M4Carbine.OverlayLower()
 			System.LogAlways("M4CARBINE overlay lower grid from the stance clip")
 			return
 		end
-		if overlay.aimPlaying == overlay.raiseClip and overlay.stanceW < 0.001 and overlay.idleClip ~= overlay.crouchClip then
+		if overlay.aimPlaying == overlay.raiseClip and overlay.stanceW < 0.001 and grid then
 			overlay.gridDir = -1
 			System.LogAlways(string.format("M4CARBINE overlay lower grid from %.2f", overlay.raiseP))
 			return
@@ -2523,31 +2546,6 @@ M4Carbine.parkedAmmo = {["a90feb23-dbd1-4144-b139-c97712b059bb"] = "f10ded12-a41
 
 M4Carbine.starter = {saved = "m4_starter_kit", rounds = 300, wait = 3, at = nil, done = false}
 
-function M4Carbine.Give(item, amount, extra)
-	local items = {gun = {id = M4Carbine.itemClass, default = 1, label = "M4A1"}, ammo = {id = M4Carbine.flash.ammo, default = 100, label = "5.56 rounds"}}
-	local selected = items[string.lower(tostring(item or ""))]
-	local count = amount == nil and selected and selected.default or tonumber(amount)
-	if not selected or not count or count < 1 or count > 10000 or count ~= math.floor(count) or extra ~= nil then
-		System.LogAlways("Usage: m4_give gun|ammo [quantity] (1-10000)")
-		return
-	end
-	local player = M4Carbine.Dude()
-	if not player or not player.inventory then
-		System.LogAlways("M4CARBINE load a save before using m4_give")
-		return
-	end
-	player.inventory:CreateItem(selected.id, 1, count)
-	if selected.id == M4Carbine.itemClass then M4Carbine.back.dirty = true end
-	local message = string.format("Added %d %s to your inventory", count, selected.label)
-	pcall(UIAction.CallFunction, "hud", -1, "ShowInfoText", message, 1, 6000, false)
-	System.LogAlways("M4CARBINE " .. message)
-end
-
-function M4Carbine.RegisterCommands()
-	if type(System.AddCCommand) ~= "function" then return end
-	System.AddCCommand("m4_give", "M4Carbine.Give(%%)", "m4_give gun|ammo [quantity]: add M4s or 5.56 rounds")
-end
-
 function M4Carbine.StarterKit()
 	local starter = M4Carbine.starter
 	if starter.done then return end
@@ -2672,7 +2670,7 @@ function M4Carbine.TwinBack(back)
 	System.LogAlways("M4CARBINE twin back slot set")
 end
 
-M4Carbine.doll = {clips = {"rifle_idle_loaded", "rifle_walk_jump_rleg_start"}, layers = {8, 9}, on = {}, found = nil, scanAt = nil, scanSeconds = 1}
+M4Carbine.doll = {clips = {"rifle_walk_jump_rleg_start"}, layers = {8}, on = {}, found = nil, scanAt = nil, scanSeconds = 1}
 
 local function dollItem(dummy) return ItemManager.GetItem(dummy.human:GetItemInHand(0)) end
 
@@ -2856,7 +2854,6 @@ function Startup:M4Carbine()
 end
 
 System.LogAlways("M4CARBINE script loaded, attach " .. tostring(M4Carbine.Attach()))
-M4Carbine.RegisterCommands()
 -- The tick used to start on the first key press, so a loaded save showed the
 -- vanilla hold until then (A343).
 M4Carbine.EnsureOverlay()

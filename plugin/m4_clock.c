@@ -111,8 +111,10 @@ static const char *missing;
 static volatile LONG trigger_held, beat_ms = 110, volume = 100;
 static volatile LONG64 last_shot_tick;
 static unsigned long long next_beat, last_clock, largest_step;
-static struct { void *channel; unsigned long long start; } pending[PENDING];
+static struct { void *channel; unsigned long long start; int beat; } pending[PENDING];
 static int beats, skipped;
+static volatile LONG shots_total;
+static LONG shots_heard, burst_base;
 static const char *volatile one_shot_queue[ONE_SHOTS];
 static volatile LONG one_shot_head, one_shot_volumes[ONE_SHOTS];
 static LONG one_shot_tail;
@@ -250,22 +252,24 @@ static void play_at(unsigned long long start) {
     fmod.paused(channel, 0);
     pending[beats % PENDING].channel = channel;
     pending[beats % PENDING].start = start;
+    pending[beats % PENDING].beat = beats;
     beats++;
 }
 
-static void end_burst(unsigned long long clock) {
-    int cancelled = 0;
+static void end_burst(unsigned long long clock, LONG shots) {
+    int cancelled = 0, fired = (int)(shots - burst_base);
     for (int i = 0; i < PENDING; i++) {
-        if (pending[i].channel && pending[i].start > clock) {
+        if (pending[i].channel && pending[i].start > clock && pending[i].beat >= fired) {
             fmod.stop(pending[i].channel);
             cancelled++;
         }
         pending[i].channel = NULL;
     }
     char line[160];
-    snprintf(line, sizeof(line), "clock: burst %d beats, %d cancelled, %d late, audio clock step up to %.1f ms",
-             beats - cancelled, cancelled, skipped, largest_step * 1000.0 / fmod.rate);
+    snprintf(line, sizeof(line), "clock: burst %d beats for %d shots, %d cancelled, %d late, audio clock step up to %.1f ms",
+             beats - cancelled, fired, cancelled, skipped, largest_step * 1000.0 / fmod.rate);
     note(line);
+    shots_heard = shots;
     next_beat = 0;
     beats = skipped = 0;
     largest_step = 0;
@@ -305,11 +309,20 @@ static void on_update(void *studio) {
     unsigned long long step = (unsigned long long)beat_ms * fmod.rate / 1000;
     if (last_clock && clock - last_clock > largest_step) largest_step = clock - last_clock;
     last_clock = clock;
-    if (!trigger_held || since_last_shot() > BURST_BREAK_MS) {
-        if (next_beat) end_burst(clock);
+    LONG shots = shots_total;
+    if (next_beat && (!trigger_held || since_last_shot() > BURST_BREAK_MS)) {
+        end_burst(clock, shots);
         return;
     }
-    if (!next_beat) next_beat = clock + (unsigned long long)fmod.rate * 30 / 1000;
+    if (!next_beat) {
+        if (shots == shots_heard) return;
+        if (since_last_shot() > BURST_BREAK_MS) {
+            shots_heard = shots;
+            return;
+        }
+        burst_base = shots_heard;
+        next_beat = clock + (unsigned long long)fmod.rate * 30 / 1000;
+    }
     while (next_beat < clock) {
         next_beat += step;
         skipped++;
@@ -424,5 +437,6 @@ int m4_clock_shot(long period_ms, long volume_percent) {
     InterlockedExchange(&beat_ms, period_ms);
     InterlockedExchange(&volume, volume_percent);
     InterlockedExchange64(&last_shot_tick, now.QuadPart);
+    InterlockedIncrement(&shots_total);
     return 1;
 }

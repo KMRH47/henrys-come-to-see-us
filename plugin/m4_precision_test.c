@@ -176,6 +176,7 @@ static void times3(const double *a, const double *b, double *out) {
 #define SIGHT_TEST_FPS 60.0
 #define SIGHT_TEST_FRAMES 608
 #define SIGHT_TEST_SWAY_DEG 6.0
+#define SIGHT_TEST_ROLL_DEG 18.0
 
 static void view_of(double pitch, double yaw, double *right, double *ahead, double *up) {
     double p = pitch / DEGREES, w = yaw / DEGREES;
@@ -269,6 +270,15 @@ static double ray_gap(const sight_scene *scene, const double *p, double *along) 
     return sqrt(dot3(gap, gap));
 }
 
+static double gun_cant(const sight_scene *scene) {
+    double grip[3] = {0, 1, 0}, moved[3], world[3];
+    double q[4] = {scene->gun_quats[0][0], scene->gun_quats[0][1], scene->gun_quats[0][2], scene->gun_quats[0][3]};
+    rotate(q, grip, moved);
+    for (int i = 0; i < 3; i++)
+        world[i] = scene->location[4 * i] * moved[0] + scene->location[4 * i + 1] * moved[1] + scene->location[4 * i + 2] * moved[2];
+    return atan2(dot3(world, scene->right), dot3(world, scene->up)) * DEGREES;
+}
+
 static void reset_sight(void) {
     memset(sight_bins, 0, sizeof(sight_bins));
     memset(sight_eased, 0, sizeof(sight_eased));
@@ -282,6 +292,7 @@ static void reset_sight(void) {
     saddle_last_shot_ms = 1e12;
     saddle_reach = 0;
     saddle_turned_at = -1e12;
+    saddle_steady = raise_live = 0;
     follow_tried = follow_frames[0] = follow_frames[1] = follow_picked_frame = follow_picked = -1;
     gun_placed[0].frame = gun_placed[1].frame = body_placed[0].frame = body_placed[1].frame = -1;
     for (int i = 0; i < BODY_OWED; i++) bodies_owed[i].frame = -1;
@@ -440,7 +451,7 @@ int main(void) {
     require(pass_camera_offset == PASS_CAMERA_AT && pass_same > 0 && !pass_differ);
     puts("ok   the pass camera is found and matches the rounded camera");
 
-    enum { KEPT, ON_RAY, SWAYS, LAGS, PULLED, LOCKED, KICKED, LET_GO };
+    enum { KEPT, ON_RAY, SWAYS, LAGS, PULLED, LOCKED, KICKED, LET_GO, STEADY, SMOOTH };
     const struct {
         const char *name;
         double pitch, yaw, roll, off, right_mm, up_mm, scale, sway, later_pitch, shot_ms, turn_deg_s, norm;
@@ -449,7 +460,7 @@ int main(void) {
         double fast_deg_s, lag, fast_s, settle_s;
         int lowered;
         const char *order;
-        double lag_grow_deg_s;
+        double lag_grow_deg_s, roll_sway;
     } sight_cases[] = {
         {"level aim puts both sights on the view ray", 0, 0, 0, 0.6, 5, -3, 1, 0, 0, 1e12, 0, 1, 7, 1, 0, ON_RAY},
         {"aim 40 deg up on a turned and rolled gun", 40, 70, 25, 0.8, -4, 6, 1, 0, 40, 1e12, 0, 1, 7, 1, 0, ON_RAY},
@@ -480,6 +491,7 @@ int main(void) {
         {"a held offset in a burst is pulled back with the hands", 0, 30, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 31, 1, 0, PULLED, 0, 0.4, 3, 0, 0, "gGbB"},
         {"a held offset is pulled back when the body skins first", 0, 30, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 31, 1, 0, PULLED, 0, 0.4, 3, 0, 0, "bBgG"},
         {"the hold lets go once the offset ends", 0, 30, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 31, 1, 0, PULLED, 0, 0.4, 3, 3, 0, "gGbB"},
+        {"a standing burst's hold lets go the frame the offset ends", 0, 30, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 31, 1, 0, PULLED, 0, 0.4, 3, 0.05, 0, "gGbB"},
         {"a crouched burst's hold lets go the frame the offset ends", 0, 30, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 31, 1, STANCE_CROUCHED, PULLED, 0, 0.4, 3, 0.05, 0, "gGbB"},
         {"without the hold bit a held offset stays", 0, 30, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 15, 1, 0, LAGS, 0, 0.4, 3},
         {"a gun on the saddle sits on the ray", 0, 0, 0, 0.6, 5, -3, 1, 0, 0, 1e12, 0, 1, 31, 1, STANCE_MOUNTED, LOCKED},
@@ -488,8 +500,12 @@ int main(void) {
         {"a shot on the saddle lifts the muzzle and pushes the gun back", 0, 0, 0, 0.6, 5, -3, 1, 0, 0, 25, 0, 1, 31, 1, STANCE_MOUNTED, KICKED, 0, 0, 0, 0, 0, "gGbB"},
         {"a fast turn on the saddle keeps a gun falling 45 deg behind on the ray", 0, 0, 0, 0.6, 5, -3, 1, 0, 0, 1e12, 0, 1, 31, 1, STANCE_MOUNTED, LOCKED, 600, 0, 0.15, 0, 0, "gGbB", 300},
         {"the saddle lock holds a gun 40 deg behind just after a turn stops", 0, 0, 0, 0.6, 5, -3, 1, 0, 0, 1e12, 600, 1, 31, 1, STANCE_MOUNTED, LOCKED, 0, 40, 0.2, 0, 0, "gGbB"},
-        {"a gun 40 deg off a still view on the saddle is let go", 0, 0, 0, 0.6, 5, -3, 1, 0, 0, 1e12, 0, 1, 31, 1, STANCE_MOUNTED, LET_GO, 0, 40, 0.2, 0, 0, "gGbB"},
-        {"a gun still 40 deg behind 0.6 s after a turn is let go", 0, 0, 0, 0.6, 5, -3, 1, 0, 0, 1e12, 600, 1, 31, 1, STANCE_MOUNTED, LET_GO, 0, 40, 0.6, 0, 0, "gGbB"},
+        {"a gun 40 deg off a still view on the saddle is let go", 0, 0, 0, 0.6, 5, -3, 1, 0, 0, 1e12, 0, 1, 31, 1, STANCE_MOUNTED, LET_GO, 0, 40, 0.8, 0, 0, "gGbB"},
+        {"a gun still 40 deg behind 0.6 s after a turn is let go", 0, 0, 0, 0.6, 5, -3, 1, 0, 0, 1e12, 600, 1, 31, 1, STANCE_MOUNTED, LET_GO, 0, 40, 1.2, 0, 0, "gGbB"},
+        {"a gun rolling 10 deg on the saddle keeps a steady roll on the ray", 0, 0, 0, 0.6, 5, -3, 1, 0, 0, 1e12, 0, 1, 31, 1, STANCE_MOUNTED, STEADY, 0, 0, 0, 0, 0, "gGbB", 0, 10},
+        {"a gun rolling 10 deg on the saddle keeps a steady roll in a fast turn", 0, 0, 0, 0.6, 5, -3, 1, 0, 0, 1e12, 0, 1, 31, 1, STANCE_MOUNTED, STEADY, 600, 0, 0.15, 0, 0, "gGbB", 300, 10},
+        {"a one-frame 30 deg twitch on the saddle barely moves the gun", 0, 0, 0, 0.6, 5, -3, 1, 0, 0, 1e12, 0, 1, 31, 1, STANCE_MOUNTED, SMOOTH, 0, 30, 1 / SIGHT_TEST_FPS, 1, 0, "gGbB"},
+        {"a two-frame 20 deg twitch on the saddle barely moves the gun", 0, 0, 0, 0.6, 5, -3, 1, 0, 0, 1e12, 0, 1, 31, 1, STANCE_MOUNTED, SMOOTH, 0, 20, 2 / SIGHT_TEST_FPS, 1, 0, "gGbB"},
         {"a lowered gun on the saddle keeps its pose", 0, 0, 0, 40, 5, -3, 1, 0, 0, 0, 0, 1, 31, 1, STANCE_MOUNTED, KEPT},
         {"a lowered gun keeps its pose with the hold", 0, 0, 0, 40, 5, -3, 1, 0, 0, 0, 0, 1, 31, 1, 0, KEPT},
     };
@@ -509,15 +525,26 @@ int main(void) {
             {sight_cases[c].fast_s, sight_cases[c].fast_deg_s, sight_cases[c].lag, sight_cases[c].lag_grow_deg_s},
             {sight_cases[c].settle_s, 0, 0, 0},
         };
-        double yaw = sight_cases[c].yaw, last_sway = 0;
+        double yaw = sight_cases[c].yaw, last_sway = 0, cant_low = 1e9, cant_high = -1e9, strayed = 0;
         int frame = 0;
         for (size_t p = 0; p < sizeof(phases) / sizeof(phases[0]); p++)
             for (int start = frame, end = frame + (int)lround(phases[p].seconds * SIGHT_TEST_FPS); frame < end;
                  frame++, yaw += phases[p].yaw_deg_s / SIGHT_TEST_FPS) {
                 last_sway = sight_cases[c].sway * sin(frame * SIGHT_TEST_SWAY_DEG / DEGREES);
                 double lag = phases[p].lag + phases[p].grow_deg_s * (frame - start) / SIGHT_TEST_FPS;
-                sight_run(&scene, sight_cases[c].pitch, yaw, sight_cases[c].roll, sight_cases[c].off + lag + last_sway,
+                double roll = sight_cases[c].roll + sight_cases[c].roll_sway * sin(frame * SIGHT_TEST_ROLL_DEG / DEGREES);
+                sight_run(&scene, sight_cases[c].pitch, yaw, roll, sight_cases[c].off + lag + last_sway,
                           sight_cases[c].right_mm, sight_cases[c].up_mm, sight_cases[c].scale, gun_instance, order);
+                if (sight_cases[c].expect == SMOOTH && frame >= SIGHT_TEST_FRAMES) {
+                    double rear_at, front_at, front_off = ray_gap(&scene, SIGHT_FRONT, &front_at);
+                    ray_gap(&scene, SIGHT_REAR, &rear_at);
+                    strayed = fmax(strayed, atan2(front_off, front_at - rear_at) * DEGREES);
+                }
+                if (sight_cases[c].expect == STEADY && frame >= SIGHT_TEST_FRAMES / 2) {
+                    double cant = gun_cant(&scene);
+                    cant_low = fmin(cant_low, cant);
+                    cant_high = fmax(cant_high, cant);
+                }
             }
         if (sight_cases[c].later_pitch != sight_cases[c].pitch) {
             int bins = learned_bins();
@@ -564,6 +591,14 @@ int main(void) {
             require(sight_rowed > 0 && last->why == ROW_OFF_LINE && last->held && (last->stance & STANCE_MOUNTED));
             for (int j = 0; j < JOINTS; j++) require(!memcmp(scene.gun_quats[j], JOINT_TURNS[j], 16));
             printf("ok   sight %s (%.1f deg off the ray, left as posed)\n", sight_cases[c].name, last->angle);
+        } else if (sight_cases[c].expect == STEADY) {
+            double swing = cant_high - cant_low;
+            require(rear_gap < 2e-6 && front_gap < 2e-6 && fabs(rear_along - 0.31) < 1e-4);
+            require(swing < 0.2 * 2 * sight_cases[c].roll_sway);
+            printf("ok   sight %s (roll swings %.2f deg for a %.0f deg roll swing)\n", sight_cases[c].name, swing, 2 * sight_cases[c].roll_sway);
+        } else if (sight_cases[c].expect == SMOOTH) {
+            require(rear_gap < 2e-6 && front_gap < 2e-6 && strayed < 0.25 * sight_cases[c].lag);
+            printf("ok   sight %s (front strays %.2f deg for a %.0f deg twitch)\n", sight_cases[c].name, strayed, sight_cases[c].lag);
         } else if (sight_cases[c].expect == KICKED) {
             const sight_row *last = &sight_rows[sight_rowed - 1];
             double lifted = atan2(front_gap, front_along - rear_along) * DEGREES, pushed = 0.31 - rear_along;

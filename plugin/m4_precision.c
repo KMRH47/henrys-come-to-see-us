@@ -83,7 +83,7 @@ static const unsigned char SKINNING_ARGS_CONTEXT_RCX_DATA_RDI[] = {0x48, 0x89, 0
 #define PRECISION_FOLLOW 8
 #define PRECISION_HOLD 16
 volatile LONG m4_precision = PRECISION_CAMERA | PRECISION_GUN | PRECISION_SIGHT | PRECISION_FOLLOW | PRECISION_HOLD;
-volatile LONG m4_saddle_lift = 50, m4_saddle_push = 10;
+volatile LONG m4_saddle_lift = 50, m4_saddle_push = 10, m4_saddle_ease = 60, m4_saddle_rate = 200;
 void *volatile m4_body_instance;
 extern volatile LONG tag_armed;
 double m4_since_shot_ms(void);
@@ -133,6 +133,7 @@ typedef struct {
 #define SIGHT_HOLD_S 0.5
 #define SIGHT_STEADY_FRAMES 8
 #define SIGHT_SHOT_QUIET_MS 600
+#define VIEW_FRESH_S 0.1
 #define SIGHT_TRACE_AFTER_SHOT_MS 3000
 #define SIGHT_BIN_DEG 2.0
 #define SIGHT_BINS 91
@@ -145,6 +146,10 @@ typedef struct {
 #define SADDLE_KICK_RISE_MS 25.0
 #define SADDLE_KICK_FALL_MS 90.0
 #define SADDLE_CATCH_S 0.5
+#define SADDLE_STEADY_S 1.0
+#define SADDLE_REST_DEG 0.01
+#define SADDLE_REST_M 0.0001
+#define SADDLE_SLIDE_M_S 1.5
 #define BODY_OWED 8
 #define SIGHT_DUMP_REPORTS 10
 #define SIGHT_TRACE_FRAMES 512
@@ -212,6 +217,9 @@ static volatile LONG gun_lost_skins, gun_bare_skins, gun_rescued_skins, shift_fu
 static volatile LONG follow_same, follow_late, first_gun, first_body, body_waited, body_gave_up, body_on_gun_thread, body_refixed;
 static volatile DWORD gun_thread;
 static double body_wait_peak, saddle_kick, saddle_kick_from, saddle_last_shot_ms = 1e12, saddle_reach, saddle_turned_at = -1e12;
+static double saddle_cant, saddle_depth;
+static int saddle_steady, raise_live;
+static double raise_turn[4], raise_rear[3], raise_at;
 static LONG sight_reports;
 static void *volatile sight_instance;
 static volatile float sight_joint[8] = {0, 0, 0, 1, 0, 0, 0, 0};
@@ -612,6 +620,101 @@ static double saddle_kicked(double since_shot) {
     return saddle_kick;
 }
 
+static void steady_saddle(double *applied, const double *gun, double dt, double depth, double reach, const double *right,
+                          const double *ahead, const double *up) {
+    double turn[3], q[4], grip[3], spun[3], twist[3], tq[4], total[4];
+    for (int i = 0; i < 3; i++) {
+        turn[i] = applied[0] * right[i] + applied[1] * ahead[i] + applied[2] * up[i];
+        grip[i] = gun[3 * i + 1];
+    }
+    quat_of(turn, q);
+    rotate(q, grip, spun);
+    double cant = atan2(dot3(spun, right), dot3(spun, up));
+    if (!saddle_steady) {
+        saddle_cant = cant;
+        saddle_depth = depth;
+        saddle_steady = 1;
+    }
+    double ease = 1 - exp(-dt / SADDLE_STEADY_S);
+    saddle_cant += ease * remainder(cant - saddle_cant, 2 * M_PI);
+    saddle_depth += ease * (depth - saddle_depth);
+    double untwist = sight_follow * remainder(saddle_cant - cant, 2 * M_PI);
+    for (int i = 0; i < 3; i++) twist[i] = ahead[i] * untwist;
+    quat_of(twist, tq);
+    quat_times(tq, q, total);
+    double sine = sqrt(total[0] * total[0] + total[1] * total[1] + total[2] * total[2]), angle = 2 * atan2(sine, total[3]);
+    for (int i = 0; i < 3; i++) turn[i] = sine > 1e-12 ? total[i] / sine * angle : 0;
+    applied[0] = dot3(turn, right);
+    applied[1] = dot3(turn, ahead);
+    applied[2] = dot3(turn, up);
+    applied[4] += sight_follow * (saddle_depth - reach - applied[4]);
+}
+
+static void quat_of_axes(const double *m, double *q) {
+    double t = m[0] + m[4] + m[8], s;
+    if (t > 0) {
+        s = 2 * sqrt(t + 1);
+        q[0] = (m[7] - m[5]) / s, q[1] = (m[2] - m[6]) / s, q[2] = (m[3] - m[1]) / s, q[3] = s / 4;
+    } else if (m[0] > m[4] && m[0] > m[8]) {
+        s = 2 * sqrt(1 + m[0] - m[4] - m[8]);
+        q[0] = s / 4, q[1] = (m[1] + m[3]) / s, q[2] = (m[2] + m[6]) / s, q[3] = (m[7] - m[5]) / s;
+    } else if (m[4] > m[8]) {
+        s = 2 * sqrt(1 + m[4] - m[0] - m[8]);
+        q[0] = (m[1] + m[3]) / s, q[1] = s / 4, q[2] = (m[5] + m[7]) / s, q[3] = (m[2] - m[6]) / s;
+    } else {
+        s = 2 * sqrt(1 + m[8] - m[0] - m[4]);
+        q[0] = (m[2] + m[6]) / s, q[1] = (m[5] + m[7]) / s, q[2] = s / 4, q[3] = (m[3] - m[1]) / s;
+    }
+}
+
+static double turn_between(const double *to, const double *from, double *turn) {
+    double back[4] = {-from[0], -from[1], -from[2], from[3]}, q[4];
+    quat_times(to, back, q);
+    if (q[3] < 0)
+        for (int i = 0; i < 4; i++) q[i] = -q[i];
+    double sine = sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]), angle = 2 * atan2(sine, q[3]);
+    for (int i = 0; i < 3; i++) turn[i] = sine > 1e-12 ? q[i] / sine * angle : 0;
+    return angle;
+}
+
+static int raise_step(const double *goal, const double *gun, double scale, const double *rear, double now, const double *right,
+                      const double *ahead, const double *up, double *shown) {
+    const double *basis[3] = {right, ahead, up};
+    double axes[9], raw[4], q[4], aim[4], spot[3], at[3], left[3], step[3];
+    for (int a = 0; a < 3; a++) {
+        at[a] = dot3(rear, basis[a]);
+        spot[a] = at[a] + goal[3 + a];
+        for (int k = 0; k < 3; k++) axes[3 * a + k] = (gun[k] * basis[a][0] + gun[3 + k] * basis[a][1] + gun[6 + k] * basis[a][2]) / scale;
+    }
+    quat_of_axes(axes, raw);
+    quat_of(goal, q);
+    quat_times(q, raw, aim);
+    double dt = raise_live ? now - raise_at : 0;
+    raise_at = now;
+    if (!raise_live) {
+        memcpy(raise_turn, aim, sizeof(aim));
+        memcpy(raise_rear, spot, sizeof(spot));
+        raise_live = 1;
+    }
+    double angle = turn_between(aim, raise_turn, left), gone[3], apart;
+    for (int i = 0; i < 3; i++) gone[i] = spot[i] - raise_rear[i];
+    apart = sqrt(dot3(gone, gone));
+    double ease = 1 - exp(-dt * 1000 / m4_saddle_ease);
+    double spin = angle > 1e-12 ? fmin(ease, m4_saddle_rate / DEGREES * dt / angle) : 1;
+    double slide = apart > 1e-12 ? fmin(ease, SADDLE_SLIDE_M_S * dt / apart) : 1;
+    for (int i = 0; i < 3; i++) {
+        step[i] = left[i] * spin;
+        raise_rear[i] += slide * gone[i];
+    }
+    quat_of(step, q);
+    quat_times(q, raise_turn, aim);
+    double size = sqrt(aim[0] * aim[0] + aim[1] * aim[1] + aim[2] * aim[2] + aim[3] * aim[3]);
+    for (int i = 0; i < 4; i++) raise_turn[i] = aim[i] / size;
+    angle = turn_between(raise_turn, raw, shown);
+    for (int i = 0; i < 3; i++) shown[3 + i] = raise_rear[i] - at[i];
+    return angle * DEGREES > SADDLE_REST_DEG || sqrt(dot3(shown + 3, shown + 3)) > SADDLE_REST_M;
+}
+
 static int sight_solved(const float *m, const float *view, const float *at, const float *camera, const double *world,
                         void *instance, LONG frame, float *out) {
     double gun[9] = {m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]};
@@ -643,7 +746,10 @@ static int sight_solved(const float *m, const float *view, const float *at, cons
     int saddle = (stance & STANCE_MOUNTED) && instance == sight_instance && sight_active && sight_settled && m4_aim_held();
     if (saddle && dt > 0 && turned / dt > SIGHT_FOLLOW_FULL_DEG_S) saddle_turned_at = now;
     int catching = saddle && now - saddle_turned_at < SADDLE_CATCH_S, beyond = reach < SIGHT_NEAR_M || reach > SIGHT_FAR_M;
-    if (length < 1e-6 || (beyond && !catching)) {
+    int raising = (m4_precision & PRECISION_FOLLOW) && m4_saddle_ease > 0 && m4_saddle_rate > 0 && (stance & STANCE_MOUNTED) && m4_aim_held();
+    if (!raising) raise_live = 0;
+    raising = raising && instance == sight_instance;
+    if (length < 1e-6 || (beyond && !catching && !(raising && raise_live))) {
         unsolved_row(&row, ROW_OUT_OF_REACH, r, f, right, ahead, up, instance);
         return 0;
     }
@@ -654,7 +760,7 @@ static int sight_solved(const float *m, const float *view, const float *at, cons
     }
     cross3(line, ahead, axis);
     double sine = sqrt(dot3(axis, axis)), angle = atan2(sine, dot3(line, ahead)) * DEGREES, gap = sqrt(dot3(miss, miss));
-    double weight = gap > SIGHT_REACH_M ? 0 : fmin(1, fmax(0, (SIGHT_NONE_DEG - angle) / (SIGHT_NONE_DEG - SIGHT_FULL_DEG)));
+    double weight = gap > SIGHT_REACH_M || (beyond && !catching) ? 0 : fmin(1, fmax(0, (SIGHT_NONE_DEG - angle) / (SIGHT_NONE_DEG - SIGHT_FULL_DEG)));
     row.angle = (float)angle;
     row.gap = (float)(gap * 1000);
     if (catching && (beyond || weight < 1)) {
@@ -664,9 +770,12 @@ static int sight_solved(const float *m, const float *view, const float *at, cons
     } else if ((stance & STANCE_MOUNTED) && weight >= 1) {
         saddle_reach = reach;
     }
-    int mounted = weight > 0 && (stance & STANCE_MOUNTED);
+    double shown[6] = {0, 0, 0, 0, 0, 0};
+    int stepped = weight <= 0 && raising && raise_live;
+    int easing = stepped && raise_step(shown, gun, scale, r, now, right, ahead, up, shown);
+    int saddled = weight > 0 && (stance & STANCE_MOUNTED), mounted = saddled || easing;
     if (mounted) InterlockedIncrement(&sight_mounted);
-    if (weight <= 0) {
+    if (weight <= 0 && !easing) {
         if (instance == sight_instance) sight_active = sight_steady = 0;
         unsolved_row(&row, ROW_OFF_LINE, r, f, right, ahead, up, instance);
         return 0;
@@ -721,15 +830,24 @@ static int sight_solved(const float *m, const float *view, const float *at, cons
     } else if (now - sight_follow_at > SIGHT_FOLLOW_HOLD_S) {
         sight_follow += (fast - sight_follow) * (1 - exp(-dt / SIGHT_FOLLOW_EASE_S));
     }
-    int holding = (m4_precision & PRECISION_HOLD) && sight_settled, within = shooting && (stance & STANCE_CROUCHED);
+    int holding = (m4_precision & PRECISION_HOLD) && sight_settled;
     double pull = holding ? 1 - exp(-dt / SIGHT_HOLD_S) : 0, applied[6];
     for (int i = 0; i < 6; i++) {
         double raw = sample[i] - sight_eased[i];
         sight_held[i] = holding ? sight_held[i] + pull * (raw - sight_held[i]) : 0;
-        if (within) sight_held[i] = raw > 0 ? fmax(0, fmin(sight_held[i], raw)) : fmin(0, fmax(sight_held[i], raw));
+        sight_held[i] = raw > 0 ? fmax(0, fmin(sight_held[i], raw)) : fmin(0, fmax(sight_held[i], raw));
         applied[i] = sight_eased[i] + sight_held[i] + sight_follow * (raw - sight_held[i]);
     }
-    if (mounted) {
+    if (saddled && sight_follow > 0) steady_saddle(applied, gun, dt, catching ? saddle_reach : reach, reach, right, ahead, up);
+    else saddle_steady = 0;
+    if (raising && !stepped) {
+        for (int i = 0; i < 6; i++) shown[i] = weight * applied[i];
+        raise_step(shown, gun, scale, r, now, right, ahead, up, shown);
+        stepped = 1;
+    }
+    if (stepped)
+        for (int i = 0; i < 6; i++) applied[i] = shown[i];
+    if (saddled) {
         double kick = saddle_kicked(since_shot);
         applied[0] += kick * m4_saddle_lift / 100.0 / DEGREES;
         applied[4] -= kick * m4_saddle_push / 1000.0;
@@ -750,7 +868,7 @@ static int sight_solved(const float *m, const float *view, const float *at, cons
         sight_last_sample[i] = sample[i];
     }
     double turn_world[3], move_world[3], eased_turn[3], eased_move[3];
-    sight_world(applied, weight, right, ahead, up, turn_world, move_world);
+    sight_world(applied, stepped ? 1 : weight, right, ahead, up, turn_world, move_world);
     sight_world(sight_eased, weight, right, ahead, up, eased_turn, eased_move);
     if (sight_follow > 0.5) {
         InterlockedIncrement(&sight_followed);
@@ -793,8 +911,19 @@ static int sight_solved(const float *m, const float *view, const float *at, cons
 
 static void refix_bodies(LONG frame);
 
+static volatile double view_pitch, view_pitch_at = -1;
+
+int m4_view_pitch(double *pitch) {
+    double at = view_pitch_at;
+    if (at < 0 || sight_clock() - at > VIEW_FRESH_S) return 0;
+    *pitch = view_pitch;
+    return 1;
+}
+
 static int sight_of(const float *m, const float *view, const float *at, const float *camera, const double *world,
                     void *instance, float *out) {
+    view_pitch = asin(fmax(-1, fmin(1, view[9]))) * DEGREES;
+    view_pitch_at = sight_clock();
     while (InterlockedCompareExchange(&sight_lock, 1, 0)) YieldProcessor();
     LONG frame = camera_frame;
     int ok = frame == sight_frame && instance == sight_instance;
