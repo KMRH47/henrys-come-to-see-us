@@ -567,7 +567,7 @@ function M4Carbine.TriggerTick()
 	gun:SetSlotAngles(trigger.slot, {x = a.x * w, y = a.y * w, z = a.z * w})
 end
 
-M4Carbine.light = {glow = "m4_light_glow", characters = {0, 2}, lampSlot = 8, pos = {x = 0.0920367, y = 0.0835886, z = 0.5769692}, angles = {x = 0.0, y = -1.3341623, z = 1.6999993}, keys = {attack_special = true, grab_body = true, stealth_kill = true, knock_out = true, horse_pulldown = true, mercy_kill = true, butcher = true}, debounce = 0.15, hipWait = 0.3, pressAt = -1, switchAt = -1, on = false, lit = nil, archetype = "Lights.Standard.Light_Lantern", texture = "textures/projectors/round_02_diff.dds", radius = 25, fov = 50, colour = {x = 1, y = 0.95, z = 0.86}, power = 1.5, fog = 1}
+M4Carbine.light = {glow = "m4_light_glow", characters = {0, 2}, lampSlot = 8, pos = {x = 0.0920367, y = 0.0835886, z = 0.5769692}, angles = {x = 0.0, y = -1.3341623, z = 1.6999993}, keys = {attack_special = true, grab_body = true, stealth_kill = true, knock_out = true, horse_pulldown = true, mercy_kill = true, butcher = true}, debounce = 0.15, pressAt = -1, switchAt = -1, on = false, lit = nil, archetype = "Lights.Standard.Light_Lantern", texture = "textures/projectors/round_02_diff.dds", radius = 25, fov = 50, colour = {x = 1, y = 0.95, z = 0.86}, power = 1.5, fog = 1}
 
 function M4Carbine.LightGlow(gun, on)
 	local light = M4Carbine.light
@@ -576,31 +576,10 @@ end
 
 function M4Carbine.LightPress(action, activation)
 	local light = M4Carbine.light
-	if activation ~= "press" or not light.keys[action] or not M4Carbine.inHand then return end
+	if activation ~= "press" or not light.keys[action] or not (M4Carbine.inHand and M4Carbine.overlay.aimHeld) then return end
 	local now = M4Carbine.Now()
 	if now - light.pressAt < light.debounce then return end
-	light.pressAt = now
-	if M4Carbine.overlay.aimHeld then return M4Carbine.LightSwitch(action, now) end
-	M4Carbine.LightHip(action, "press")
-	M4Carbine.At(light.hipWait, function()
-		if M4Carbine.LightHip(action, "check") then M4Carbine.LightSwitch(action, M4Carbine.Now()) end
-	end)
-end
-
--- F at the hip also starts takedowns, so the light switches only when the M4
--- hold is still up hipWait after the press.
-function M4Carbine.LightHip(action, when)
-	local player, overlay = M4Carbine.Dude(), M4Carbine.overlay
-	local drawn = player and player.human and player.human:IsWeaponDrawn() or false
-	local free = M4Carbine.inHand and drawn and overlay.state == "on" and not overlay.aimHeld and not overlay.holstering
-	System.LogAlways(string.format("M4LIGHT hip %s %s drawn=%s state=%s idle=%s free=%s", when, action, tostring(drawn),
-		tostring(overlay.state), tostring(overlay.idleClip), tostring(free)))
-	return free
-end
-
-function M4Carbine.LightSwitch(action, now)
-	local light = M4Carbine.light
-	light.on, light.switchAt = not light.on, now
+	light.pressAt, light.on, light.switchAt = now, not light.on, now
 	if M4Carbine.FingerAimed() then
 		local tap = M4Carbine.tap
 		tap.at, light.switchAt = now, now + tap.liftFor + tap.pressFor
