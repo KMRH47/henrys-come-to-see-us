@@ -7,6 +7,10 @@
 
 void m4_tag_draw(int m4) { (void)m4; }
 void m4_tag_drawn(int m4) { (void)m4; }
+static unsigned escape_taps;
+volatile LONG m4_sight_dot;
+volatile LONG m4_sight_picking;
+void m4_tap_escape(void) { escape_taps++; }
 
 static unsigned lines;
 static char last_line[256];
@@ -327,8 +331,8 @@ int main(void) {
     m4_buff_original = (void *)fake_buff;
 
     unsigned char records[NO_RECORD][0x20] = {{0}};
-    memcpy(records[M4_WEAPON] + GUID_OFFSET, M4_GUID, 16);
-    memcpy(records[OTHER_WEAPON] + GUID_OFFSET, M4_GUID, 16);
+    memcpy(records[M4_WEAPON] + GUID_OFFSET, M4_GUIDS[0], 16);
+    memcpy(records[OTHER_WEAPON] + GUID_OFFSET, M4_GUIDS[0], 16);
     records[OTHER_WEAPON][GUID_OFFSET + 15] ^= 1;
     memcpy(records[M4_ROUND] + GUID_OFFSET, M4_AMMO_GUIDS[0], 16);
     memcpy(records[M4_SPARE_ROUND] + GUID_OFFSET, M4_AMMO_GUIDS[1], 16);
@@ -507,6 +511,28 @@ int main(void) {
     require(clear_calls == 3 && lua_cvars_open == LUA_CVARS_ALL && strstr(last_line, "ca_UseLookIK no longer needs -devmode"));
     require(call_get_cvar(&console_object, "sys_spec") == &fake_cvar_object && get_calls == 8 && clear_calls == 3);
     puts("PASS: the cvars the mod's Lua sets lose their cheat lock on the main thread's console reads, a missing one is retried");
+    static const struct { const char *name; unsigned taps; } escapes[] = {{"sys_spec", 0}, {"m4_ui_cancel", 1}, {"m4_ui_cancel_x", 0}, {"m4_ui_cancel", 1}};
+    for (size_t e = 0; e < sizeof(escapes) / sizeof(escapes[0]); e++) {
+        unsigned before = escape_taps;
+        call_get_cvar(&console_object, escapes[e].name);
+        require(escape_taps == before + escapes[e].taps);
+    }
+    get_calls -= sizeof(escapes) / sizeof(escapes[0]);
+    puts("PASS: a main-thread read of m4_ui_cancel taps Esc once, other names never do");
+    static const struct { const char *name; LONG dot; } sight_lines[] = {{"m4_sight_dot", 1}, {"sys_spec", 1}, {"m4_sight_irons", 0}, {"m4_sight_dotx", 0}, {"m4_sight_dot", 1}};
+    for (size_t l = 0; l < sizeof(sight_lines) / sizeof(sight_lines[0]); l++) {
+        call_get_cvar(&console_object, sight_lines[l].name);
+        require(m4_sight_dot == sight_lines[l].dot);
+    }
+    get_calls -= sizeof(sight_lines) / sizeof(sight_lines[0]);
+    puts("PASS: m4_sight_dot puts the sight solve on the red dot's line and m4_sight_irons puts it back on the irons");
+    static const struct { const char *name; LONG picking; } picks[] = {{"m4_sight_pickx", 0}, {"m4_sight_dot", 0}, {"m4_sight_pick", 1}};
+    for (size_t k = 0; k < sizeof(picks) / sizeof(picks[0]); k++) {
+        call_get_cvar(&console_object, picks[k].name);
+        require(m4_sight_picking == picks[k].picking);
+    }
+    get_calls -= sizeof(picks) / sizeof(picks[0]);
+    puts("PASS: a read of m4_sight_pick arms the picker's M4 swallow, other names never do");
 
     require(health_bridge(m4_hit_record, head, BUFFS, 18.0f, 242.0f, SMASH) == 18.0f);
     require(set_calls == 1 && !strcmp(cvar_text, "1 12.250 -3.500 100.125"));

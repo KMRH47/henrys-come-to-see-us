@@ -45,10 +45,20 @@ int m4_is_ammo_record(const unsigned char *record);
 #define STRING_CVAR_VTABLE_RVA 0x3a7f1a0
 #define CONSOLE_REGISTER_STRING 0x10
 #define CONSOLE_GET_CVAR 0xb8
+#define CONSOLE_EXECUTE_STRING 0x118
 #define CVAR_SET_STRING 0x48
 #define CVAR_CLEAR_FLAGS 0x58
 #define CVAR_CHEAT_FLAGS 0x3000002
 #define HEAD_CVAR "m4_head_hit"
+#define ESCAPE_CVAR "m4_ui_cancel"
+#define SIGHT_DOT_CVAR "m4_sight_dot"
+#define SIGHT_IRONS_CVAR "m4_sight_irons"
+#define SIGHT_PICK_CVAR "m4_sight_pick"
+#define DOLL_START_CVAR "m4_doll_start"
+#define DOLL_STOP_CVAR "m4_doll_stop"
+#define DOLL_LINE "m4_doll_tick"
+#define DOLL_TIMER 0x4d34
+#define DOLL_TIMER_MS 10
 #define HEAD_CVAR_START "0 0 0 0"
 #define HEAD_BODY 1.45f
 #define CONSOLE_WAIT_MS 600000
@@ -242,6 +252,9 @@ void *m4_attack_resume;
 void *m4_buff_original;
 static unsigned char *damage_game;
 void m4_qam_console(void *console);
+void m4_tap_escape(void);
+extern volatile LONG m4_sight_dot;
+extern volatile LONG m4_sight_picking;
 static unsigned char *(*damage_record)(void *);
 static unsigned char *(*damage_item)(unsigned char *);
 static unsigned char (*damage_level)(void *);
@@ -400,12 +413,62 @@ static void lua_cvars_unlock(void *console) {
     }
 }
 
+static int console_execute(const char *line, int silent, int deferred) {
+    void *console = damage_game ? *(void *volatile *)(damage_game + CONSOLE_GLOBAL_RVA) : NULL;
+    if (!console || *(unsigned char **)console != damage_game + CONSOLE_VTABLE_RVA) return 0;
+    void (*execute)(void *, const char *, int, int) = (*(void ***)console)[CONSOLE_EXECUTE_STRING / 8];
+    execute(console, line, silent, deferred);
+    return 1;
+}
+
+int m4_console_run(const char *line) {
+    return console_execute(line, 0, 1);
+}
+
+static HWND doll_window;
+static WNDPROC doll_window_original;
+static int doll_timer_on;
+
+static LRESULT CALLBACK doll_window_proc(HWND window, UINT message, WPARAM w, LPARAM l) {
+    if (message == WM_TIMER && w == DOLL_TIMER) {
+        console_execute(DOLL_LINE, 1, 0);
+        return 0;
+    }
+    return CallWindowProcW(doll_window_original, window, message, w, l);
+}
+
+static BOOL CALLBACK doll_find_window(HWND window, LPARAM found) {
+    if (!IsWindowVisible(window) || GetWindow(window, GW_OWNER)) return TRUE;
+    *(HWND *)found = window;
+    return FALSE;
+}
+
+static void doll_timer(int on) {
+    if (!doll_window && on) {
+        HWND window = NULL;
+        EnumThreadWindows(m4_main_thread, doll_find_window, (LPARAM)&window);
+        doll_window_original = window ? (WNDPROC)SetWindowLongPtrW(window, GWLP_WNDPROC, (LONG_PTR)doll_window_proc) : NULL;
+        doll_window = doll_window_original ? window : NULL;
+        note(doll_window ? "doll: a window timer re-poses the inventory doll every 10 ms" : "doll: no game window; the doll re-poses once a second in the inventory");
+    }
+    if (!doll_window || on == doll_timer_on) return;
+    doll_timer_on = on;
+    if (on) SetTimer(doll_window, DOLL_TIMER, DOLL_TIMER_MS, NULL);
+    else KillTimer(doll_window, DOLL_TIMER);
+}
+
 void *m4_console_get(void *console, const char *name) {
     if (GetCurrentThreadId() == m4_main_thread) {
         if (lua_cvars_open != LUA_CVARS_ALL) lua_cvars_unlock(console);
         m4_qam_console(console);
         if (!head_cvar) head_register(console);
         if (head_cvar && head_waiting) head_flush();
+        if (name && !strcmp(name, ESCAPE_CVAR)) m4_tap_escape();
+        if (name && !strcmp(name, SIGHT_DOT_CVAR)) InterlockedExchange(&m4_sight_dot, 1);
+        if (name && !strcmp(name, SIGHT_IRONS_CVAR)) InterlockedExchange(&m4_sight_dot, 0);
+        if (name && !strcmp(name, SIGHT_PICK_CVAR)) InterlockedExchange(&m4_sight_picking, 1);
+        if (name && !strcmp(name, DOLL_START_CVAR)) doll_timer(1);
+        if (name && !strcmp(name, DOLL_STOP_CVAR)) doll_timer(0);
     }
     return console_get(console, name);
 }

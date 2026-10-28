@@ -1,5 +1,10 @@
 M4Carbine = M4Carbine or {}
 M4Carbine.itemClass = "106b3519-0607-4b29-b7a2-9d8fb554a23e"
+M4Carbine.dotClass = "353677f2-3b74-4e02-94aa-be00e15883b6"
+
+function M4Carbine.IsCarbine(item)
+	return item ~= nil and (item.class == M4Carbine.itemClass or item.class == M4Carbine.dotClass)
+end
 M4Carbine.inHand = nil
 M4Carbine.projectile = nil
 
@@ -35,7 +40,7 @@ end
 
 function M4Carbine.HoldsCarbine()
 	local item = M4Carbine.ItemInHand()
-	return item ~= nil and item.class == M4Carbine.itemClass
+	return M4Carbine.IsCarbine(item)
 end
 
 -- The M4's aim-in and spread buff (prm, lcs, was) is only on while it is in hand, so the
@@ -340,6 +345,7 @@ function M4Carbine.FrameTick(token)
 	M4Carbine.Try("FingerTick", M4Carbine.FingerTick, player)
 	M4Carbine.Try("TriggerTick", M4Carbine.TriggerTick)
 	M4Carbine.Try("LightTick", M4Carbine.LightTick)
+	M4Carbine.Try("SightTick", M4Carbine.SightTick)
 	M4Carbine.Try("Watch", M4Carbine.Watch, player)
 	M4Carbine.crouchedMemo.open = false
 	M4Carbine.tickPlayer = nil
@@ -574,6 +580,119 @@ function M4Carbine.LightGlow(gun, on)
 	for _, slot in ipairs(light.characters) do gun:HideAttachment(slot, light.glow, not on, not on) end
 end
 
+M4Carbine.sight = {dot = "m4_red_dot", irons = "m4_irons", characters = {0, 2}, item = "7c1d5e3a-2b8f-4c6d-9e41-a35f0b7d2c18", ironsItem = "bcec2309-15a9-45cc-ba3a-c965ce427250", drawn = {}, filter = "weapon.rifle.*", watch = 10, kind = nil, picked = nil, pickedAt = -1}
+
+function M4Carbine.SightModel(item)
+	local sight = M4Carbine.sight
+	local gun = item and item.entity ~= 0 and System.GetEntity(item.entity)
+	if not gun then return end
+	local mounted = item.class == M4Carbine.dotClass
+	if sight.drawn[tostring(gun.id)] == mounted then return end
+	sight.drawn[tostring(gun.id)] = mounted
+	for _, slot in ipairs(sight.characters) do
+		gun:HideAttachment(slot, sight.dot, not mounted, not mounted)
+		gun:HideAttachment(slot, sight.irons, mounted, mounted)
+	end
+	System.LogAlways("M4SIGHT " .. (mounted and "red dot" or "irons") .. " on " .. tostring(gun.id))
+end
+
+function M4Carbine.SightTick()
+	local held = M4Carbine.inHand and M4Carbine.ItemInHand()
+	M4Carbine.SightModel(held)
+	M4Carbine.SightModel(M4Carbine.back.item and ItemManager.GetItem(M4Carbine.back.item))
+	if held then M4Carbine.SightLine(held.class == M4Carbine.dotClass) end
+	local sight = M4Carbine.sight
+	if sight.registered then return end
+	sight.registered = pcall(UIAction.RegisterElementListener, sight, "ItemSelection", -1, "", "OnPickerEvent")
+		and pcall(UIAction.RegisterElementListener, sight, "ApseInventoryList", -1, "", "OnListEvent")
+end
+
+function M4Carbine.SightItem(wuid)
+	if not wuid then return nil end
+	local want = string.lower(tostring(wuid)):gsub("^w", "")
+	for _, id in pairs(M4Carbine.Dude().inventory:GetInventoryTable()) do
+		if (string.lower(tostring(id)):gsub("^userdata: ", "")) == want then return ItemManager.GetItem(id) end
+	end
+end
+
+function M4Carbine.sight.OnPickerEvent(self, element, instance, event, args)
+	local sight = M4Carbine.sight
+	System.LogAlways("M4SIGHT picker " .. tostring(event) .. " " .. tostring(args and args[0]) .. " picking " .. tostring(sight.kind))
+	if not sight.kind then return end
+	if event == "OnDoubleClicked" then
+		sight.picked = args and args[0]
+		System.GetCVar("m4_sight_pick")
+	elseif event == "OnClosed" then
+		local kind, picked = sight.kind, sight.picked
+		sight.kind, sight.picked, sight.pickedAt = nil, nil, M4Carbine.Now()
+		if picked then Script.SetTimer(1, function() M4Carbine.Try("SightMount", M4Carbine.SightMount, kind, M4Carbine.SightItem(picked)) end) end
+	end
+end
+
+function M4Carbine.sight.OnListEvent(self, element, instance, event, args)
+	local sight = M4Carbine.sight
+	if (sight.kind or M4Carbine.Now() - sight.pickedAt < sight.watch) and not string.find(tostring(event), "Tab$") and not string.find(tostring(event), "Tooltip$") then
+		System.LogAlways("M4SIGHT list " .. tostring(event) .. " " .. tostring(args and args[0]))
+	end
+	local doll = M4Carbine.doll
+	if doll.open then
+		doll.via = tostring(event)
+		M4Carbine.Try("DollTick", M4Carbine.DollTick)
+		doll.via = nil
+	end
+end
+
+function M4Carbine.SightLine(mounted)
+	local sight, profile = M4Carbine.sight, M4CarbineSightProfile
+	if sight.line == mounted or not (profile and profile.dot and profile.irons) then return end
+	local line = mounted and profile.dot or profile.irons
+	profile.rear, profile.front, sight.line = line.rear, line.front, mounted
+	System.GetCVar(mounted and "m4_sight_dot" or "m4_sight_irons")
+	System.LogAlways("M4SIGHT aiming down the " .. (mounted and "red dot" or "iron sights"))
+end
+
+function M4Carbine.SightGuns()
+	local guns = {}
+	for _, id in pairs(M4Carbine.Dude().inventory:GetInventoryTable()) do
+		local item = ItemManager.GetItem(id)
+		if M4Carbine.IsCarbine(item) then guns[#guns + 1] = item end
+	end
+	return guns
+end
+
+function M4Carbine.SightApply(kind)
+	local sight, guns = M4Carbine.sight, M4Carbine.SightGuns()
+	if sight.kind then return end
+	if #guns < 2 then return M4Carbine.SightMount(kind, guns[1]) end
+	sight.kind, sight.picked = kind, nil
+	local player = M4Carbine.Dude()
+	player.actor:OpenItemSelectionFilter(player.id, sight.filter)
+	System.LogAlways("M4SIGHT picking a rifle for the " .. kind)
+end
+
+function M4Carbine.SightMount(kind, gun)
+	local sight, mount = M4Carbine.sight, kind ~= "irons"
+	local used = mount and sight.item or sight.ironsItem
+	pcall(UIAction.CallFunction, "ApseInventoryList", -1, "Activate")
+	local text
+	if not M4Carbine.IsCarbine(gun) then
+		text = mount and "The red dot sight only fits the M4A1" or "These iron sights only fit the M4A1"
+	elseif (gun.class == M4Carbine.dotClass) == mount then
+		text = mount and "This M4A1 already carries a red dot sight" or "This M4A1 already has its iron sights"
+	else
+		local inventory, equipped = M4Carbine.Dude().inventory, gun.entity ~= 0
+		inventory:DeleteItem(gun.id, 1)
+		inventory:CreateItem(mount and M4Carbine.dotClass or M4Carbine.itemClass, gun.health, 1)
+		M4Carbine.back.dirty = true
+		inventory:DeleteItemOfClass(used, 1)
+		inventory:CreateItem(mount and sight.ironsItem or sight.item, 1, 1)
+		text = mount and "Red dot sight mounted on the M4A1, its iron sights are in your inventory" or "Iron sights back on the M4A1, the red dot sight is in your inventory"
+		if equipped then text = text .. ". Equip the M4A1 again" end
+	end
+	pcall(UIAction.CallFunction, "hud", -1, "ShowInfoText", text, 1, 6000, false)
+	System.LogAlways("M4SIGHT " .. text)
+end
+
 function M4Carbine.LightPress(action, activation)
 	local light = M4Carbine.light
 	if activation ~= "press" or not light.keys[action] or not (M4Carbine.inHand and M4Carbine.overlay.aimHeld) then return end
@@ -646,7 +765,7 @@ end
 -- saves: Lua state survives a load in the same session, and the player's AI table
 -- and an item's condition cannot carry it (probes 2026-10-07). A save from before
 -- the magazines reads 0, so its first draw reloads.
-M4Carbine.mag = M4Carbine.mag or {size = 30, rounds = nil, reloading = false, token = 0, key = "toggle_torch", saved = "m4_mag_rounds"}
+M4Carbine.mag = M4Carbine.mag or {size = 30, rounds = nil, reloading = false, token = 0, key = "toggle_torch", saved = "m4_mag_rounds", drawWait = 0.5}
 
 function M4Carbine.MagStore(rounds)
 	local mag = M4Carbine.mag
@@ -835,7 +954,9 @@ function M4Carbine.MagDrawn(held)
 	local ok, saved = pcall(Variables.GetGlobal, mag.saved)
 	M4Carbine.MagStore(math.min(ok and tonumber(saved) or 0, M4Carbine.MagStock()))
 	M4Carbine.MagSend()
-	if mag.rounds == 0 then M4Carbine.MagReload() end
+	if mag.rounds ~= 0 then return end
+	local token = mag.token
+	M4Carbine.At(mag.drawWait, function() if mag.token == token then M4Carbine.MagReload() end end)
 end
 
 function M4Carbine.MagSpent(spent)
@@ -976,6 +1097,7 @@ function M4Carbine.MagModelStart()
 	local gun = model.entity == nil and M4Carbine.MagGun()
 	if not gun then return end
 	gun:LoadCharacter(2, model.bare)
+	M4Carbine.sight.drawn[tostring(gun.id)] = nil
 	if M4Carbine.light.lit == gun.id then M4Carbine.LightGlow(gun, true) end
 	gun:DrawSlot(0, 0)
 	gun:LoadObject(1, model.cgf)
@@ -2502,6 +2624,7 @@ function M4Carbine.PoseTick()
 	M4Carbine.OverlaySync(overlay.drawBlend, (overlay.holstering or not M4Carbine.inHand) and overlay.holsterBlend or overlay.aimBlend)
 	M4Carbine.AutoArmTick()
 	pcall(M4Carbine.StarterKit)
+	pcall(M4Carbine.StashSight)
 	M4Carbine.AimPoseGuard()
 	pcall(M4Carbine.DrawTap)
 	M4Carbine.ChargeGuard()
@@ -2525,6 +2648,35 @@ M4Carbine.parkedAmmo = {["a90feb23-dbd1-4144-b139-c97712b059bb"] = "f10ded12-a41
 
 M4Carbine.starter = {saved = "m4_starter_kit", rounds = 300, wait = 3, at = nil, done = false}
 
+function M4Carbine.Give(item, amount, extra)
+	local items = {gun = {id = M4Carbine.itemClass, default = 1, label = "M4A1"}, gun_red_dot = {id = M4Carbine.dotClass, default = 1, label = "M4A1 (Red Dot)"},
+		red_dot = {id = M4Carbine.sight.item, default = 1, label = "red dot sight"}, irons = {id = M4Carbine.sight.ironsItem, default = 1, label = "M4A1 iron sights"},
+		ammo = {id = M4Carbine.flash.ammo, default = 100, label = "5.56 rounds"}}
+	local selected = items[string.lower(tostring(item or ""))]
+	local count = amount == nil and selected and selected.default or tonumber(amount)
+	if not selected or not count or count < 1 or count > 10000 or count ~= math.floor(count) or extra ~= nil then
+		System.LogAlways("Usage: m4_give gun|gun_red_dot|red_dot|irons|ammo [quantity] (1-10000)")
+		return
+	end
+	local player = M4Carbine.Dude()
+	if not player or not player.inventory then
+		System.LogAlways("M4CARBINE load a save before using m4_give")
+		return
+	end
+	player.inventory:CreateItem(selected.id, 1, count)
+	if selected.id == M4Carbine.itemClass or selected.id == M4Carbine.dotClass then M4Carbine.back.dirty = true end
+	local message = string.format("Added %d %s to your inventory", count, selected.label)
+	pcall(UIAction.CallFunction, "hud", -1, "ShowInfoText", message, 1, 6000, false)
+	System.LogAlways("M4CARBINE " .. message)
+end
+
+function M4Carbine.RegisterCommands()
+	if type(System.AddCCommand) ~= "function" then return end
+	System.AddCCommand("m4_give", "M4Carbine.Give(%%)", "m4_give gun|gun_red_dot|red_dot|irons|ammo [quantity]: add M4s, sights or 5.56 rounds")
+	System.AddCCommand("m4_sight_apply", "M4Carbine.SightApply(%%)", "m4_sight_apply dot|irons: the plugin runs this when a sight is used")
+	System.AddCCommand("m4_doll_tick", "M4Carbine.DollTimer()", "the plugin runs this while the inventory doll is shown")
+end
+
 function M4Carbine.StarterKit()
 	local starter = M4Carbine.starter
 	if starter.done then return end
@@ -2534,7 +2686,7 @@ function M4Carbine.StarterKit()
 	starter.done = true
 	local ok, given = pcall(Variables.GetGlobal, starter.saved)
 	local first = not (ok and tonumber(given) == 1) or (inventory:GetCountOfClass(M4Carbine.flash.ammo) or 0) == 0
-	if (inventory:GetCountOfClass(M4Carbine.itemClass) or 0) == 0 then
+	if (inventory:GetCountOfClass(M4Carbine.itemClass) or 0) + (inventory:GetCountOfClass(M4Carbine.dotClass) or 0) == 0 then
 		inventory:CreateItem(M4Carbine.itemClass, 1, 1)
 		M4Carbine.back.dirty = true
 		if first then inventory:CreateItem(M4Carbine.flash.ammo, 1, starter.rounds) end
@@ -2543,6 +2695,28 @@ function M4Carbine.StarterKit()
 		System.LogAlways("M4CARBINE starter kit given" .. (first and "" or ", gun only"))
 	end
 	Variables.SetGlobal(starter.saved, 1)
+end
+
+M4Carbine.stash = {saved = "m4_stash_sight", chest = "playerMasterChest", every = 5, at = nil, done = false}
+
+function M4Carbine.StashSight()
+	local stash = M4Carbine.stash
+	if stash.done then return end
+	stash.at = stash.at or M4Carbine.Now()
+	if math.abs(M4Carbine.Now() - stash.at) < stash.every then return end
+	stash.at = M4Carbine.Now()
+	local ok, given = pcall(Variables.GetGlobal, stash.saved)
+	if ok and tonumber(given) == 1 then stash.done = true; return end
+	for _, chest in ipairs(System.GetEntitiesByClass("Stash") or {}) do
+		if string.find(chest:GetName(), stash.chest, 1, true) and chest.inventory then
+			chest.inventory:CreateItem(M4Carbine.sight.item, 1, 1)
+			Variables.SetGlobal(stash.saved, 1)
+			stash.done = true
+			pcall(UIAction.CallFunction, "hud", -1, "ShowInfoText", "A red dot sight for the M4A1 waits in your stash", 1, 6000, false)
+			System.LogAlways("M4SIGHT red dot sight put in " .. chest:GetName())
+			return
+		end
+	end
 end
 
 function M4Carbine.UnparkAmmo()
@@ -2600,20 +2774,23 @@ function M4Carbine.AutoArmTick()
 	pcall(autoArm)
 end
 
-M4Carbine.back = {angles = {x = math.rad(5.3), y = math.rad(-17.1), z = math.rad(-54.5)}, pos = {x = 0.084, y = 0.044, z = 0.028}, entity = nil, dirty = true}
+M4Carbine.back = {angles = {x = math.rad(5.3), y = math.rad(-17.1), z = math.rad(-54.5)}, pos = {x = 0.084, y = 0.044, z = 0.028}, entity = nil, dirty = true, reload = true, rescan = 1, scanAt = nil}
 
 function M4Carbine.SyncBack()
-	if not M4Carbine.back.dirty then return end
-	M4Carbine.back.dirty = false
+	local back = M4Carbine.back
+	if not back.dirty then return end
+	if back.scanAt and math.abs(M4Carbine.Now() - back.scanAt) < back.rescan then return end
+	back.scanAt, back.dirty = M4Carbine.Now(), false
 	local entity, owned = nil, nil
 	for _, id in pairs(M4Carbine.Dude().inventory:GetInventoryTable()) do
 		local item = ItemManager.GetItem(id)
-		if item and item.class == M4Carbine.itemClass then
+		if M4Carbine.IsCarbine(item) then
 			owned = id
 			if item.entity ~= 0 then entity = item.entity end
 		end
 	end
-	M4Carbine.back.entity, M4Carbine.back.item = entity, owned
+	back.entity, back.item = entity, owned
+	if not entity then back.dirty = true end
 end
 
 function M4Carbine.BackFrame(player)
@@ -2627,7 +2804,8 @@ function M4Carbine.BackFrame(player)
 	local gun = back.entity and System.GetEntity(back.entity)
 	if not gun then return end
 	local at, slot = gun:GetWorldPos(), player:GetBonePos('BackSlot_cannon')
-	if math.abs(at.x - slot.x) + math.abs(at.y - slot.y) + math.abs(at.z - slot.z) < 0.01 then
+	if back.reload or math.abs(at.x - slot.x) + math.abs(at.y - slot.y) + math.abs(at.z - slot.z) < 0.01 then
+		back.reload = false
 		player:SetAttachmentPos(0, 'weapon_cannon', back.pos, false)
 		M4Carbine.When(function() return true end, function() player:SetAttachmentAngles(0, 'weapon_cannon', back.angles, false) end)
 		System.LogAlways("M4CARBINE back slot set")
@@ -2649,9 +2827,14 @@ function M4Carbine.TwinBack(back)
 	System.LogAlways("M4CARBINE twin back slot set")
 end
 
-M4Carbine.doll = {clips = {"rifle_walk_jump_rleg_start"}, layers = {8}, on = {}, found = nil, scanAt = nil, scanSeconds = 1}
+M4Carbine.doll = {clips = {"rifle_walk_jump_rleg_start"}, layers = {9}, on = {}, found = nil, scanAt = nil, scanSeconds = 1, timer = nil}
 
 local function dollItem(dummy) return ItemManager.GetItem(dummy.human:GetItemInHand(0)) end
+
+local function dollPosed(dummy, layer)
+	local ok, running = pcall(dummy.IsAnimationRunning, dummy, 0, layer)
+	return not ok or running ~= false
+end
 
 function M4Carbine.DollDummies()
 	local doll, now = M4Carbine.doll, M4Carbine.Now()
@@ -2675,22 +2858,42 @@ function M4Carbine.DollTick()
 		local hidden = dummy:IsHidden()
 		open = open or not hidden
 		local key = tostring(dummy.id)
-		local want = false
+		local want, held = false, false
 		if not hidden then
 			local ok, item = pcall(dollItem, dummy)
-			want = ok and item ~= nil and item.class == M4Carbine.itemClass
+			want = ok and M4Carbine.IsCarbine(item)
 			if want and item.entity ~= 0 then M4Carbine.TriggerModel(System.GetEntity(item.entity)) end
+			if want then M4Carbine.SightModel(item) end
+			held = want and tostring(item.id)
 		end
-		if want ~= (doll.on[key] == true) then
-			doll.on[key] = want
+		local lost = held and held == doll.on[key] and not dollPosed(dummy, doll.layers[1])
+		if lost or held ~= (doll.on[key] or false) then
+			doll.on[key] = held
 			for i, layer in ipairs(doll.layers) do
-				if want then dummy:StartAnimation(0, doll.clips[i], layer, 0, 1, true) else dummy:StopAnimation(0, layer) end
+				if want then dummy:StartAnimation(0, doll.clips[i], layer, 0, 1, true) else
+					dummy:StopAnimation(0, layer)
+					pcall(dummy.ResetAnimation, dummy, 0, layer)
+				end
 			end
-			System.LogAlways("M4CARBINE doll " .. tostring(dummy:GetName()) .. " M4 pose " .. tostring(want))
+			pcall(dummy.ForceCharacterUpdate, dummy, 0, true)
+			local layers = ""
+			for layer = 0, 9 do layers = layers .. (dollPosed(dummy, layer) and tostring(layer) or "-") end
+			System.LogAlways("M4CARBINE doll " .. tostring(dummy:GetName()) .. " M4 pose " .. tostring(want) .. " frame " .. M4Carbine.frameNo .. (lost and " after the pose stopped" or " for " .. tostring(held)) .. " layers " .. layers .. " via " .. (doll.via or "frame"))
 		end
 	end
 	if doll.open and not open then M4Carbine.back.dirty = true end
 	doll.open = open
+	if open ~= doll.timer then
+		doll.timer = open
+		System.GetCVar(open and "m4_doll_start" or "m4_doll_stop")
+	end
+end
+
+function M4Carbine.DollTimer()
+	local doll = M4Carbine.doll
+	doll.via = "timer"
+	M4Carbine.Try("DollTick", M4Carbine.DollTick)
+	doll.via = nil
 end
 
 M4Carbine.wall = {shotAt = -1}
@@ -2712,11 +2915,12 @@ function M4Carbine.OverlayReloaded(reason)
 	M4Carbine.counter.barKnown = false
 	M4Carbine.finger.held, M4Carbine.finger.on, M4Carbine.finger.playing, M4Carbine.tap.at = false, false, false, -1
 	M4Carbine.trigger.w, M4Carbine.trigger.entity, M4Carbine.trigger.drawn = 0, nil, {}
-	M4Carbine.back.dirty = true
+	M4Carbine.back.dirty, M4Carbine.back.reload, M4Carbine.back.scanAt = true, true, nil
 	M4Carbine.doll.found, M4Carbine.doll.scanAt = nil, nil
 	M4Carbine.props.at = nil
 	M4Carbine.UnparkAmmo()
 	M4Carbine.starter.done, M4Carbine.starter.at = false, nil
+	M4Carbine.stash.done, M4Carbine.stash.at = false, nil
 	M4Carbine.headshot.seq = nil
 	-- A load drops the pending frame timer while the last tick is still fresh, so
 	-- the M4 sat in the vanilla hold until the next key press (A746, user: "before
@@ -2833,6 +3037,7 @@ function Startup:M4Carbine()
 end
 
 System.LogAlways("M4CARBINE script loaded, attach " .. tostring(M4Carbine.Attach()))
+M4Carbine.RegisterCommands()
 -- The tick used to start on the first key press, so a loaded save showed the
 -- vanilla hold until then (A343).
 M4Carbine.EnsureOverlay()

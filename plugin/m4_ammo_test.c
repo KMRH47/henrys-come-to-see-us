@@ -275,12 +275,15 @@ int main(void) {
             }
         }
     }
-    cls[MASK_OFFSET] = 0x18;
-    memcpy(record + GUID_OFFSET, M4_GUID, 16);
-    require(on_weapon_class(record, cls, NULL) == cls && cls[MASK_OFFSET] == M4_MASK);
-    memset(record + GUID_OFFSET, 0, 16);
-    require(on_weapon_class(record, cls, NULL) == cls && cls[MASK_OFFSET] == 0x18);
-    memcpy(record + GUID_OFFSET, M4_GUID, 16);
+    for (size_t g = 0; g < sizeof(M4_GUIDS) / sizeof(M4_GUIDS[0]); g++) {
+        cls[MASK_OFFSET] = 0x18;
+        memcpy(record + GUID_OFFSET, M4_GUIDS[g], 16);
+        require(on_weapon_class(record, cls, NULL) == cls && cls[MASK_OFFSET] == M4_MASK);
+        memset(record + GUID_OFFSET, 0, 16);
+        require(on_weapon_class(record, cls, NULL) == cls && cls[MASK_OFFSET] == 0x18);
+    }
+    puts("PASS: the iron sights M4 and the red dot M4 both take the M4 ammo mask, and another rifle gets its own back");
+    memcpy(record + GUID_OFFSET, M4_GUIDS[0], 16);
     require(on_weapon_class(record, cls, NULL) == cls);
     m4_class_flags(1, 0);
     require(cls[AUTO_LOAD_OFFSET] == 1 && cls[REQUIRES_COCKING_OFFSET] == 0 && cls[LOADING_MOVEMENT_OFFSET] == 2 && cls[MOVEMENT_CROUCH_OFFSET] == 1);

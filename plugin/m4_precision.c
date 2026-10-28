@@ -82,6 +82,7 @@ static const unsigned char SKINNING_ARGS_CONTEXT_RCX_DATA_RDI[] = {0x48, 0x89, 0
 #define PRECISION_SIGHT 4
 #define PRECISION_FOLLOW 8
 #define PRECISION_HOLD 16
+volatile LONG m4_sight_dot;
 volatile LONG m4_precision = PRECISION_CAMERA | PRECISION_GUN | PRECISION_SIGHT | PRECISION_FOLLOW | PRECISION_HOLD;
 volatile LONG m4_saddle_lift = 50, m4_saddle_push = 10, m4_saddle_ease = 60, m4_saddle_rate = 200;
 void *volatile m4_body_instance;
@@ -163,8 +164,10 @@ typedef struct {
 #define ROW_MARK 9
 #define STANCE_CROUCHED 1
 #define STANCE_MOUNTED 2
-static const double SIGHT_REAR[3] = {0.140397154076, -0.074617902452, 0.187947916991};
-static const double SIGHT_FRONT[3] = {0.128965611263, 0.0133479983902, 0.555790121473};
+static const double SIGHT_REAR[3] = {0.140185506235, -0.0745253730437, 0.187918731327};
+static const double SIGHT_FRONT[3] = {0.1273731919, 0.0140441813561, 0.555570531152};
+static const double DOT_REAR[3] = {0.142877491594, -0.0757738976918, 0.188300963487};
+static const double DOT_FRONT[3] = {0.13006517726, 0.0127956567081, 0.555952763312};
 
 typedef struct {
     double weight, value[6];
@@ -732,8 +735,8 @@ static int sight_solved(const float *m, const float *view, const float *at, cons
     if (instance == sight_instance)
         for (int i = 0; i < 8; i++) joint[i] = sight_joint[i];
     double rear[3], front[3], r[3], f[3], place[3];
-    dual_apply(joint, SIGHT_REAR, rear);
-    dual_apply(joint, SIGHT_FRONT, front);
+    dual_apply(joint, m4_sight_dot ? DOT_REAR : SIGHT_REAR, rear);
+    dual_apply(joint, m4_sight_dot ? DOT_FRONT : SIGHT_FRONT, front);
     for (int i = 0; i < 3; i++) {
         double base = place[i] = (double)at[i] - (double)camera[i] + world[i];
         r[i] = base + gun[3 * i] * rear[0] + gun[3 * i + 1] * rear[1] + gun[3 * i + 2] * rear[2];

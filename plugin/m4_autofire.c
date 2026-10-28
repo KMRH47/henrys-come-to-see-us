@@ -58,6 +58,7 @@ DWORD WINAPI draw_hook(LPVOID unused);
 DWORD WINAPI fire_hook(LPVOID unused);
 DWORD WINAPI load_hook(LPVOID unused);
 DWORD WINAPI torch_hook(LPVOID unused);
+DWORD WINAPI sight_hook(LPVOID unused);
 DWORD WINAPI precision_hook(LPVOID unused);
 DWORD WINAPI damage_hook(LPVOID unused);
 DWORD WINAPI qam_hook(LPVOID unused);
@@ -80,6 +81,24 @@ static void send_button(DWORD flag) {
     input.type = INPUT_MOUSE;
     input.mi.dwFlags = flag;
     SendInput(1, &input, sizeof(input));
+}
+
+static DWORD WINAPI escape_tap(LPVOID unused) {
+    INPUT input = {0};
+    input.type = INPUT_KEYBOARD;
+    input.ki.wVk = VK_ESCAPE;
+    input.ki.wScan = (WORD)MapVirtualKeyA(VK_ESCAPE, MAPVK_VK_TO_VSC);
+    SendInput(1, &input, sizeof(input));
+    Sleep(40);
+    input.ki.dwFlags = KEYEVENTF_KEYUP;
+    SendInput(1, &input, sizeof(input));
+    note("escape tapped for the mod's Lua");
+    return 0;
+}
+
+void m4_tap_escape(void) {
+    HANDLE thread = CreateThread(NULL, 0, escape_tap, NULL, 0, NULL);
+    if (thread) CloseHandle(thread);
 }
 
 static void tap_aim(void) {
@@ -554,6 +573,7 @@ static DWORD WINAPI start(LPVOID unused) {
     CreateThread(NULL, 0, qam_hook, NULL, 0, NULL);
     CreateThread(NULL, 0, load_hook, NULL, 0, NULL);
     CreateThread(NULL, 0, torch_hook, NULL, 0, NULL);
+    CreateThread(NULL, 0, sight_hook, NULL, 0, NULL);
     CreateThread(NULL, 0, precision_hook, NULL, 0, NULL);
     CreateThread(NULL, 0, damage_hook, NULL, 0, NULL);
     CreateThread(NULL, 0, look_hook, NULL, 0, NULL);

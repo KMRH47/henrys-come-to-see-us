@@ -1,4 +1,5 @@
 #define WIN32_LEAN_AND_MEAN
+#include "m4_weapon.h"
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
@@ -44,7 +45,6 @@ static const unsigned char LOOKUP_BYTES[] = {0x48, 0x83, 0xec, 0x28, 0xe8, 0x0b,
 static const unsigned char TAIL_BYTES[] = {0x48, 0x83, 0xc4, 0x28, 0xc3};
 static const unsigned char RECORD_CLASS_BYTES[] = {0x48, 0x83, 0xec, 0x28, 0x48, 0x8b, 0x81, 0xe8, 0x00, 0x00, 0x00};
 
-static const unsigned char M4_GUID[16] = {0x19, 0x35, 0x6b, 0x10, 0x07, 0x06, 0x29, 0x4b, 0xb7, 0xa2, 0x9d, 0x8f, 0xb5, 0x54, 0xa2, 0x3e};
 static const unsigned char M4_AMMO_GUIDS[][16] = {
     {0x7c, 0xda, 0x51, 0xef, 0xe7, 0x92, 0x56, 0x4e, 0x8c, 0x7f, 0x3d, 0x22, 0xa2, 0x7f, 0xe9, 0xa2},
     {0x42, 0xbb, 0x35, 0x22, 0xa1, 0x7a, 0x12, 0x4b, 0x9d, 0x7e, 0x41, 0x92, 0xbc, 0x5a, 0x2c, 0xe1}
@@ -190,7 +190,7 @@ static void remember_rifle(unsigned char *record) {
 
 static void on_record(unsigned char *record, unsigned char *caller) {
     if (caller < game_base || caller > game_base + 0x8000000) return;
-    int m4 = !memcmp(record + GUID_OFFSET, M4_GUID, sizeof(M4_GUID));
+    int m4 = m4_is_weapon_record(record);
     for (size_t i = 0; !m4 && i < RIFLE_RECORDS; i++)
         if (rifle_records[i] == record) { m4 = -1; break; }
     if (m4 && caller == game_base + PRESS_LOOKUP_RVA) m4_tag_draw(m4 > 0);
@@ -201,13 +201,13 @@ static const unsigned char RECORD_HOOK_LEAVE[] = {0x48, 0x83, 0xc4, 0x28, 0x41, 
 
 static unsigned char *on_weapon_class(unsigned char *record, unsigned char *cls, unsigned char *caller) {
     if (!cls) return cls;
-    int m4 = !memcmp(record + GUID_OFFSET, M4_GUID, sizeof(M4_GUID));
+    int m4 = m4_is_weapon_record(record);
     if (m4_class && (m4 || cls == m4_class)) {
         if (!m4) remember_rifle(record);
         trace_draw(record, caller, m4);
         if (caller == game_base + DRAW_LOOKUP_RVA) m4_tag_drawn(m4);
     }
-    if (!memcmp(record + GUID_OFFSET, M4_GUID, sizeof(M4_GUID))) {
+    if (m4_is_weapon_record(record)) {
         if (!m4_class) {
             announce(record, cls);
             table_mask = cls[MASK_OFFSET];
