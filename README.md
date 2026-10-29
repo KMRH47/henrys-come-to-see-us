@@ -28,6 +28,11 @@ m4_give irons
 
 Unzip it and run `install_windows.bat` on Windows or `install_linux.sh` on Linux.
 Or install it by hand with the steps above.
+
+The installers find the game through Steam, copy the zip's `game` folder into it and list what they copied in `m_carbine_install.txt`.
+Run one again to update or remove the mod; removing deletes only the files on that list.
+Read them first in [`install/`](install/).
+The Nexus download leaves them out because Nexus's virus scan flags them.
 The mod page is on [Nexus Mods](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3886).
 
 ## What is here
