@@ -8,17 +8,11 @@
 
 ### Launch options for Linux and Steam Deck
 
-<details><summary>Show</summary>
-
 ```
 WINEDLLOVERRIDES="dinput8=n,b" %command%
 ```
 
-</details>
-
 ### Console commands
-
-<details><summary>Show</summary>
 
 ```
 m4_give gun
@@ -27,8 +21,6 @@ m4_give ammo
 m4_give red_dot
 m4_give irons
 ```
-
-</details>
 
 ## Download
 
