@@ -1,6 +1,6 @@
 <p align="center"><img src="docs/page/banner-690da305e755.png" width="850" alt="Henry&#x27;s Come to See Us!, an M4A1 for Kingdom Come: Deliverance II."><br>
 <img src="docs/page/notice-75d02c12bddc.png" width="850" alt="Version 6, The Red Dot Sight: Fit it to any M4, take it off again. Each gun keeps its own."><br>
-<img src="docs/page/panels-63013dde09e1.png" width="850" alt="How to install and remove the mod, what it is compatible with, and the M4A1, 5.56 magazine, red dot sight and iron sights in the game."><br>
+<img src="docs/page/panels-4a0c05dad7c3.png" width="850" alt="How to install and remove the mod, what it is compatible with, and the M4A1, 5.56 magazine, red dot sight and iron sights in the game."><br>
 <img src="docs/page/features-8fa4c4b524b3.png" width="850" alt="What the M4 does in the game."><br>
 <img src="docs/page/gallery-167494890226.png" width="850" alt="Pictures from the game."><br>
 <img src="docs/page/commands-77b93ad21926.png" width="850" alt="Console commands that give the M4, its ammunition and its sights, and two cheats: no recoil and the magazine size."><br>
