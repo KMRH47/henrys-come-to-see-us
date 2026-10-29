@@ -15,6 +15,7 @@
 #define RECHARGE_PREFIX "M4CARBINE auto recharge "
 #define MAG_PREFIX "M4CARBINE auto mag "
 #define LOOK_PREFIX "M4CARBINE auto look "
+#define RECOIL_PREFIX "M4CARBINE auto recoil "
 
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION_FLAG 0x00000002
 
@@ -33,6 +34,7 @@ static volatile LONG armed = 0;
 static volatile LONG aim = AIM_NONE;
 static volatile LONG recharge = -1;
 static volatile LONG mag_left = -1;
+static volatile LONG recoil_on = 1;
 volatile LONG m4_look_off;
 static volatile LONG clicks = 0;
 static volatile double aim_pressed_at = 0;
@@ -135,6 +137,7 @@ static int wobble(void) {
 }
 
 static void kick(void) {
+    if (!recoil_on) return;
     EnterCriticalSection(&kick_lock);
     if (kick_count < RECOIL_MAX_ACTIVE) {
         kicks[kick_count].start = milliseconds();
@@ -226,6 +229,9 @@ static void apply_newest_flags(const char *text) {
     next = newest_flag(text, LOOK_PREFIX);
     if (next >= 0 && next <= 1 && InterlockedExchange(&m4_look_off, next) != next)
         note(next ? "look off for the player" : "look back on for the player");
+    next = newest_flag(text, RECOIL_PREFIX);
+    if (next >= 0 && next <= 1 && InterlockedExchange(&recoil_on, next) != next)
+        note(next ? "recoil on" : "recoil off");
     next = newest_flag(text, RECHARGE_PREFIX);
     if (next >= 0) {
         LONG seen = InterlockedExchange(&recharge, next);

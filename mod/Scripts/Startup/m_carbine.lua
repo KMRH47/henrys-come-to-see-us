@@ -765,7 +765,7 @@ end
 -- saves: Lua state survives a load in the same session, and the player's AI table
 -- and an item's condition cannot carry it (probes 2026-10-07). A save from before
 -- the magazines reads 0, so its first draw reloads.
-M4Carbine.mag = M4Carbine.mag or {size = 30, rounds = nil, reloading = false, token = 0, key = "toggle_torch", saved = "m4_mag_rounds", drawWait = 0.5}
+M4Carbine.mag = M4Carbine.mag or {size = 30, standard = 30, rounds = nil, reloading = false, token = 0, key = "toggle_torch", saved = "m4_mag_rounds", drawWait = 0.5}
 
 function M4Carbine.MagStore(rounds)
 	local mag = M4Carbine.mag
@@ -951,6 +951,7 @@ function M4Carbine.MagDrawn(held)
 		return
 	end
 	M4Carbine.counter.broken = false
+	M4Carbine.CheatsLoad()
 	local ok, saved = pcall(Variables.GetGlobal, mag.saved)
 	M4Carbine.MagStore(math.min(ok and tonumber(saved) or 0, M4Carbine.MagStock()))
 	M4Carbine.MagSend()
@@ -2670,9 +2671,54 @@ function M4Carbine.Give(item, amount, extra)
 	System.LogAlways("M4CARBINE " .. message)
 end
 
+M4Carbine.cheats = {recoilOff = "m4_recoil_off", magSize = "m4_mag_size"}
+
+function M4Carbine.CheatsLoad()
+	local cheats, mag = M4Carbine.cheats, M4Carbine.mag
+	local ok, size = pcall(Variables.GetGlobal, cheats.magSize)
+	size = ok and tonumber(size) or 0
+	mag.size = size >= 1 and size or mag.standard
+	local okOff, off = pcall(Variables.GetGlobal, cheats.recoilOff)
+	System.LogAlways("M4CARBINE auto recoil " .. ((okOff and tonumber(off) == 1) and "0" or "1"))
+end
+
+function M4Carbine.CheatSaid(message)
+	pcall(UIAction.CallFunction, "hud", -1, "ShowInfoText", message, 1, 6000, false)
+	System.LogAlways("M4CARBINE " .. message)
+end
+
+function M4Carbine.Recoil(state, extra)
+	local off = ({on = 0, off = 1})[string.lower(tostring(state or ""))]
+	if not off or extra ~= nil then
+		System.LogAlways("Usage: m4_recoil on|off")
+		return
+	end
+	pcall(Variables.SetGlobal, M4Carbine.cheats.recoilOff, off)
+	M4Carbine.CheatsLoad()
+	M4Carbine.CheatSaid(off == 1 and "M4 recoil off" or "M4 recoil on")
+end
+
+function M4Carbine.MagSize(amount, extra)
+	local mag = M4Carbine.mag
+	local size = tonumber(amount)
+	if not size or size < 1 or size > 10000 or size ~= math.floor(size) or extra ~= nil then
+		System.LogAlways(string.format("Usage: m4_mag_size 1-10000 (now %d, standard %d)", mag.size, mag.standard))
+		return
+	end
+	pcall(Variables.SetGlobal, M4Carbine.cheats.magSize, size)
+	M4Carbine.CheatsLoad()
+	if mag.rounds and mag.rounds > size then
+		M4Carbine.MagStore(size)
+		M4Carbine.MagSend()
+	end
+	M4Carbine.CheatSaid(string.format("M4 magazine holds %d rounds", size))
+end
+
 function M4Carbine.RegisterCommands()
 	if type(System.AddCCommand) ~= "function" then return end
 	System.AddCCommand("m4_give", "M4Carbine.Give(%%)", "m4_give gun|gun_red_dot|red_dot|irons|ammo [quantity]: add M4s, sights or 5.56 rounds")
+	System.AddCCommand("m4_recoil", "M4Carbine.Recoil(%%)", "m4_recoil on|off: turn the M4's recoil on or off")
+	System.AddCCommand("m4_mag_size", "M4Carbine.MagSize(%%)", "m4_mag_size 1-10000: rounds one M4 magazine holds, 30 by default")
 	System.AddCCommand("m4_sight_apply", "M4Carbine.SightApply(%%)", "m4_sight_apply dot|irons: the plugin runs this when a sight is used")
 	System.AddCCommand("m4_doll_tick", "M4Carbine.DollTimer()", "the plugin runs this while the inventory doll is shown")
 end
