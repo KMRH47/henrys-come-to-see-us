@@ -1,16 +1,41 @@
 <p align="center"><img src="docs/page/banner.png" width="850" alt="Henry&#x27;s Come to See Us!, an M4A1 for Kingdom Come: Deliverance II."><br>
-<img src="docs/page/notice.png" width="850" alt="Version 6, The Red Dot Sight: Fit it to any M4, take it off again. Each gun keeps its own."><br>
-<img src="docs/page/panels.png" width="850" alt="How to install and remove the mod, what it is compatible with, and the M4A1, 5.56 magazine and red dot sight in the game."><br>
+<img src="docs/page/notice.png" width="850" alt="Version 7, The Red Dot Sight: Fit it to any M4, take it off again. Each gun keeps its own."><br>
+<img src="docs/page/panels.png" width="850" alt="How to install and remove the mod, what it is compatible with, and the M4A1, 5.56 magazine, red dot sight and iron sights in the game."><br>
 <img src="docs/page/features.png" width="850" alt="What the M4 does in the game."><br>
 <img src="docs/page/commands.png" width="850" alt="Console commands that give the M4, its ammunition and its sights."><br>
 <img src="docs/page/gallery.png" width="850" alt="Pictures from the game."><br>
 <img src="docs/page/forge.png" width="850" alt="Built with kcd2-forge, the CLI and studio the mod is made with."></p>
 
+### Launch options for Linux and Steam Deck
+
+<details><summary>Show</summary>
+
+```
+WINEDLLOVERRIDES="dinput8=n,b" %command%
+```
+
+</details>
+
+### Console commands
+
+<details><summary>Show</summary>
+
+```
+m4_give gun
+m4_give gun_red_dot
+m4_give ammo
+m4_give red_dot
+m4_give irons
+```
+
+</details>
+
 ## Download
 
-**[Download henrys-come-to-see-us-6.zip](https://github.com/KMRH47/henrys-come-to-see-us/releases/download/v6/henrys-come-to-see-us-6.zip)**
+**[Download the newest release](https://github.com/KMRH47/henrys-come-to-see-us/releases/latest)**
 
 Unzip it and run `install_windows.bat` on Windows or `install_linux.sh` on Linux.
+Or install it by hand with the steps above.
 The mod page is on [Nexus Mods](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3886).
 
 ## What is here
@@ -23,7 +48,7 @@ This repo holds the parts of the mod that were made for it.
 | `mod/` | The mod's Lua scripts, item, weapon and ammo tables, sound and particle setup, round counter and text. |
 | `model/` | The M4 model in Blender, with its baked textures packed in. |
 | `sounds/` | The shot and reload sounds. |
-| `install/` | The Windows and Linux installers shipped in the Nexus zip. |
+| `install/` | The optional Windows and Linux installers, shipped in the GitHub zip only. |
 
 ## What is not here
 
