@@ -1,10 +1,10 @@
-<p align="center"><img src="docs/page/banner.png?v=a322dee7ad64" width="850" alt="Henry&#x27;s Come to See Us!, an M4A1 for Kingdom Come: Deliverance II."><br>
-<img src="docs/page/notice.png?v=3b19facdc948" width="850" alt="Version 7, The Red Dot Sight: Fit it to any M4, take it off again. Each gun keeps its own."><br>
-<img src="docs/page/panels.png?v=3c580ce2e8ff" width="850" alt="How to install and remove the mod, what it is compatible with, and the M4A1, 5.56 magazine, red dot sight and iron sights in the game."><br>
-<img src="docs/page/features.png?v=5307f35197e9" width="850" alt="What the M4 does in the game."><br>
-<img src="docs/page/commands.png?v=7501bf71604a" width="850" alt="Console commands that give the M4, its ammunition and its sights."><br>
-<img src="docs/page/gallery.png?v=26022c4d570b" width="850" alt="Pictures from the game."><br>
-<img src="docs/page/forge.png?v=9e2b88fba440" width="850" alt="Built with kcd2-forge, the CLI and studio the mod is made with."></p>
+<p align="center"><img src="docs/page/banner.png?v=690da305e755" width="850" alt="Henry&#x27;s Come to See Us!, an M4A1 for Kingdom Come: Deliverance II."><br>
+<img src="docs/page/notice.png?v=96feb7b88f86" width="850" alt="Version 7, The Red Dot Sight: Fit it to any M4, take it off again. Each gun keeps its own."><br>
+<img src="docs/page/panels.png?v=63013dde09e1" width="850" alt="How to install and remove the mod, what it is compatible with, and the M4A1, 5.56 magazine, red dot sight and iron sights in the game."><br>
+<img src="docs/page/features.png?v=8fa4c4b524b3" width="850" alt="What the M4 does in the game."><br>
+<img src="docs/page/commands.png?v=ea2e5fe8164e" width="850" alt="Console commands that give the M4, its ammunition and its sights."><br>
+<img src="docs/page/gallery.png?v=167494890226" width="850" alt="Pictures from the game."><br>
+<img src="docs/page/forge.png?v=148a295b1ec1" width="850" alt="Built with kcd2-forge, the CLI and studio the mod is made with."></p>
 
 ### Launch options for Linux and Steam Deck
 
