@@ -3,7 +3,7 @@
 <img src="docs/page/panels-63013dde09e1.png" width="850" alt="How to install and remove the mod, what it is compatible with, and the M4A1, 5.56 magazine, red dot sight and iron sights in the game."><br>
 <img src="docs/page/features-8fa4c4b524b3.png" width="850" alt="What the M4 does in the game."><br>
 <img src="docs/page/gallery-167494890226.png" width="850" alt="Pictures from the game."><br>
-<img src="docs/page/commands-06f1d6b4f8b3.png" width="850" alt="Console commands that give the M4, its ammunition and its sights, and two cheats: no recoil and the magazine size."><br>
+<img src="docs/page/commands-77b93ad21926.png" width="850" alt="Console commands that give the M4, its ammunition and its sights, and two cheats: no recoil and the magazine size."><br>
 <img src="docs/page/forge-148a295b1ec1.png" width="850" alt="Built with kcd2-forge, the CLI and studio the mod is made with."></p>
 
 ### Launch options for Linux and Steam Deck
