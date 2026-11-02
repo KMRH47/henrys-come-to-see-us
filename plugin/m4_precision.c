@@ -82,9 +82,14 @@ static const unsigned char SKINNING_ARGS_CONTEXT_RCX_DATA_RDI[] = {0x48, 0x89, 0
 #define PRECISION_SIGHT 4
 #define PRECISION_FOLLOW 8
 #define PRECISION_HOLD 16
+#define PRECISION_PIN 32
 volatile LONG m4_sight_dot;
-volatile LONG m4_precision = PRECISION_CAMERA | PRECISION_GUN | PRECISION_SIGHT | PRECISION_FOLLOW | PRECISION_HOLD;
+volatile LONG m4_precision = PRECISION_CAMERA | PRECISION_GUN | PRECISION_SIGHT | PRECISION_FOLLOW | PRECISION_HOLD | PRECISION_PIN;
 volatile LONG m4_saddle_lift = 50, m4_saddle_push = 10, m4_saddle_ease = 60, m4_saddle_rate = 200;
+volatile LONG m4_hip_right = 33, m4_hip_ahead = 83, m4_hip_up = -39, m4_aim_depth = 119;
+volatile LONG m4_pin_body = 0;
+volatile LONG m4_hit_gain = 100;
+volatile LONG m4_sway_move = 20, m4_sway_tilt = 100, m4_sway_lean = 2, m4_sway_look = 15, m4_sway_aim = 25, m4_sway_hz = 220;
 void *volatile m4_body_instance;
 extern volatile LONG tag_armed;
 double m4_since_shot_ms(void);
@@ -131,7 +136,10 @@ typedef struct {
 #define SIGHT_FOLLOW_FULL_DEG_S 90.0
 #define SIGHT_FOLLOW_HOLD_S 0.3
 #define SIGHT_FOLLOW_EASE_S 0.3
+#define SIGHT_STANCE_LOCK_S 1.0
 #define SIGHT_HOLD_S 0.5
+#define SIGHT_ROLL_S 0.12
+#define SIGHT_ROLL_CAP_DEG 20.0
 #define SIGHT_STEADY_FRAMES 8
 #define SIGHT_SHOT_QUIET_MS 600
 #define VIEW_FRESH_S 0.1
@@ -164,6 +172,50 @@ typedef struct {
 #define ROW_MARK 9
 #define STANCE_CROUCHED 1
 #define STANCE_MOUNTED 2
+#define PIN_TAU_S 0.06
+#define PIN_DT_CAP_S 0.1
+#define PIN_RISE_S 0.15
+#define PIN_EASE_S 0.45
+#define PIN_EASE_WINDOW_S 1.0
+#define PIN_FALL_S 0.3
+#define PIN_ROWS 8192
+#define PIN_PATHS 8
+#define PIN_TABLES 4
+#define PIN_LEVELS 11
+#define PIN_LEVEL_ARM 8
+#define PIN_LEVEL_ELBOW 9
+#define PIN_BODY_TAU_S 0.15
+#define PIN_ARM_PULL 0.7f
+#define PIN_ELBOW_PULL 0.6f
+#define PIN_SADDLE 2
+#define SWAY_CAMERA_TAU_S 0.05
+#define SWAY_TELEPORT_M_S 30.0
+#define SWAY_ACCEL_CAP 40.0
+#define SWAY_STEP_S (1.0 / 240)
+#define SWAY_DAMPING 0.5
+#define SWAY_LIMIT_M 0.04
+#define SWAY_LOOK_CAP_DEG 3.0
+#define SWAY_ROLL 1.5
+#define SWAY_DIP 0.5
+#define SWAY_LOOK_ROLL 0.5
+#define HIT_LAST_S 0.9
+#define HIT_TAU_S 0.1
+#define HIT_FULL_LOSS 10.0
+#define HIT_SMALLEST 0.7
+#define HIT_PITCH_DEG 6.0
+#define HIT_ROLL_DEG 4.0
+#define HIT_YAW_DEG 3.0
+#define HIT_SIDE_M 0.01
+#define HIT_BACK_M 0.02
+#define HIT_DROP_M 0.02
+#define CHARACTER_VTABLE_RVA 0x40602f8
+#define CHARACTER_PATH_SLOT 31
+#define CHARACTER_PATH_RVA 0x11a6690
+#define SKELETON_VTABLE_RVA 0x406b930
+#define SKELETON_PARENT_SLOT 2
+#define SKELETON_PARENT_RVA 0x53f804
+#define SKELETON_NAME_SLOT 6
+#define SKELETON_NAME_RVA 0x5af5bc
 static const double SIGHT_REAR[3] = {0.140185506235, -0.0745253730437, 0.187918731327};
 static const double SIGHT_FRONT[3] = {0.1273731919, 0.0140441813561, 0.555570531152};
 static const double DOT_REAR[3] = {0.142877491594, -0.0757738976918, 0.188300963487};
@@ -191,6 +243,20 @@ typedef struct {
     double axes[9], place[3], scale;
 } placed_model;
 
+typedef struct {
+    double at;
+    LONG frame;
+    float dt, share, raw_deg, raw_rear[3], shown_deg, shown_rear[3], turn_deg, move_mm, speed, view_s, pitch, sway_move[3], sway_turn[3], chest;
+    int stance, aim;
+} pin_row;
+
+typedef struct {
+    void *skeleton;
+    UINT32 joints;
+    int ok;
+    unsigned char level[MAX_SHIFTED_JOINTS];
+} pin_table;
+
 static rounding cameras[CAMERA_RING], attachments[ATTACHMENT_RING];
 static skin_shift shifts[SHIFTS];
 static volatile LONG camera_head, attachment_head, camera_frame;
@@ -204,8 +270,30 @@ static void (*skinning_computation)(unsigned char *context);
 static sight_bin sight_bins[SIGHT_KINDS][SIGHT_BINS];
 static double sight_eased[6], sight_last_at, sight_last_view[3], sight_last_camera[3], sight_last_body[3], sight_last_sample[3];
 static double sight_follow, sight_follow_at, sight_held[6];
+static double sight_stance_changed_at = -1e9;
+static int sight_crouched;
 static LONG sight_settled, sight_traced, follow_tried = -1, follow_frames[2] = {-1, -1}, follow_picked_frame = -1, follow_picked = -1;
 static float follow_duals[2][8], carry_duals[2][8];
+static int carry_leveled[2];
+static volatile LONG pin_wanted, pin_ready, pin_frames, pin_level_skins, pin_rigid_skins, pin_other_vtables, pin_refused;
+static void *pin_character_vtable, *pin_parent_fn, *pin_name_fn;
+static double pin_weight, pin_weight_at, pin_share_value, pin_at, pin_shown[4], pin_mid[4], pin_rear[3], pin_mid_rear[3];
+static double pin_last_right[3], pin_last_ahead[3], pin_last_up[3], pin_last_camera[3], pin_raw_peak, pin_turn_peak, pin_move_peak;
+static double sway_at[3], sway_rate[3], sway_camera[3], sway_look[3], sway_look_rate[3], sway_aim;
+static volatile double hit_at = -1e12, hit_size, hit_side, hit_down_from, hit_side_from;
+static volatile double pin_ease_until = -1e12;
+static LONG pin_share_frame = -1, pin_step_frame = -1, pin_tables_next, pin_rowed;
+static int pin_live, pin_paths_seen;
+static char pin_paths[PIN_PATHS][MAX_PATH];
+static pin_table pin_tables[PIN_TABLES];
+static pin_row pin_rows[PIN_ROWS];
+static FILE *pin_file;
+static const float LEVEL_SHARES[PIN_LEVELS] = {0, 0.15f, 0.25f, 0.35f, 0.5f, 0.6f, 0.85f, 1, 1, 1, 1};
+static volatile float pin_chest = 1;
+static const struct { const char *name; unsigned char level; } JOINT_LEVELS[] = {
+    {"Hips", 0}, {"Spine", 1}, {"Spine1", 3}, {"Spine2", 5}, {"Spine3", 6}, {"Spine4", 7}, {"Neck", 4}, {"Neck1", 2}, {"Head", 0},
+    {"LeftArm", PIN_LEVEL_ARM}, {"RightArm", PIN_LEVEL_ARM}, {"LeftForeArm", PIN_LEVEL_ELBOW}, {"RightForeArm", PIN_LEVEL_ELBOW}, {"LeftHand", 10}, {"RightHand", 10},
+};
 static placed_model gun_placed[2] = {{-1}, {-1}}, body_placed[2] = {{-1}, {-1}};
 static sight_trace sight_traces[SIGHT_TRACE_FRAMES];
 static sight_row sight_rows[SIGHT_ROWS];
@@ -718,14 +806,344 @@ static int raise_step(const double *goal, const double *gun, double scale, const
     return angle * DEGREES > SADDLE_REST_DEG || sqrt(dot3(shown + 3, shown + 3)) > SADDLE_REST_M;
 }
 
+static void sight_commit(const double *gun, double scale, const double *rear, const double *place, const double *turn_world,
+                         const double *move_world, const double *eased_turn, const double *eased_move, int leveled, LONG frame, float *out) {
+    model_dual(gun, scale, rear, eased_turn, eased_move, out);
+    float undo[8] = {-out[0], -out[1], -out[2], out[3], -out[4], -out[5], -out[6], out[7]};
+    model_dual(gun, scale, rear, turn_world, move_world, carry_duals[frame & 1]);
+    dual_times(carry_duals[frame & 1], undo);
+    memcpy(follow_duals[frame & 1], undo, sizeof(undo));
+    follow_frames[frame & 1] = frame;
+    carry_leveled[frame & 1] = leveled;
+    placed_model *placed = &gun_placed[frame & 1];
+    memcpy(placed->axes, gun, sizeof(placed->axes));
+    memcpy(placed->place, place, sizeof(placed->place));
+    placed->scale = scale;
+    placed->frame = follow_tried = frame;
+}
+
+static float level_share(int level) {
+    float chest = pin_chest;
+    if (level == PIN_LEVEL_ARM) return 1 - (1 - chest) * PIN_ARM_PULL;
+    if (level == PIN_LEVEL_ELBOW) return 1 - (1 - chest) * PIN_ELBOW_PULL;
+    return level < PIN_LEVEL_ARM ? LEVEL_SHARES[level] * chest : LEVEL_SHARES[level];
+}
+
+static void pin_chest_step(double carried, double elapsed) {
+    double limit = m4_pin_body / 1000.0, target = pin_wanted == PIN_SADDLE ? 0 : carried > limit ? limit / carried : 1;
+    pin_chest += (float)((target - pin_chest) * (1 - exp(-fmin(elapsed, PIN_DT_CAP_S) / PIN_BODY_TAU_S)));
+}
+
+void m4_pin_signal(int on) {
+    InterlockedExchange(&pin_wanted, on);
+}
+
+void m4_pin_ease(void) {
+    pin_ease_until = sight_clock() + PIN_EASE_WINDOW_S;
+}
+
+static void hit_amounts(double now, double *down, double *side) {
+    double t = now - hit_at;
+    *down = *side = 0;
+    if (t < 0 || t >= HIT_LAST_S) return;
+    double shape = t / HIT_TAU_S * exp(1 - t / HIT_TAU_S), fade = exp(-t / HIT_TAU_S);
+    *down = hit_size * shape + hit_down_from * fade;
+    *side = hit_size * hit_side * shape + hit_side_from * fade;
+}
+
+void m4_hit_signal(double lost) {
+    double now = sight_clock(), down, side;
+    hit_amounts(now, &down, &side);
+    hit_down_from = down;
+    hit_side_from = side;
+    hit_size = HIT_SMALLEST + (1 - HIT_SMALLEST) * fmin(1, lost / HIT_FULL_LOSS);
+    hit_side = ((LONG)(now * 1000) >> 3) & 1 ? 1 : -1;
+    hit_at = now;
+}
+
+static void hit_flinch(double now, double scale, double *value) {
+    double down, side, gain = scale * m4_hit_gain / 100.0;
+    hit_amounts(now, &down, &side);
+    value[0] -= gain * down * HIT_PITCH_DEG / DEGREES;
+    value[1] += gain * side * HIT_ROLL_DEG / DEGREES;
+    value[2] += gain * side * HIT_YAW_DEG / DEGREES;
+    value[3] += gain * side * HIT_SIDE_M;
+    value[4] -= gain * down * HIT_BACK_M;
+    value[5] -= gain * down * HIT_DROP_M;
+}
+
+static double pin_share(double now, int stance, LONG frame) {
+    if (pin_share_frame == frame) return pin_share_value;
+    pin_share_frame = frame;
+    int wanted = pin_wanted && (m4_precision & PRECISION_PIN) && pin_ready && !((pin_wanted == PIN_SADDLE || (stance & STANCE_MOUNTED)) && m4_aim_held());
+    double dt = fmin(now - pin_weight_at, PIN_DT_CAP_S);
+    pin_weight_at = now;
+    pin_weight = wanted ? fmin(1, pin_weight + dt / (now < pin_ease_until ? PIN_EASE_S : PIN_RISE_S)) : fmax(0, pin_weight - dt / PIN_FALL_S);
+    if (pin_weight <= 0) pin_live = 0;
+    pin_share_value = pin_weight * pin_weight * (3 - 2 * pin_weight);
+    return pin_share_value;
+}
+
+static int has_word(const char *text, const char *word) {
+    size_t length = strlen(word);
+    for (; *text; text++)
+        if (!_strnicmp(text, word, length)) return 1;
+    return 0;
+}
+
+static void pin_note_path(const char *path, int gun) {
+    for (int i = 0; i < pin_paths_seen; i++)
+        if (!strcmp(pin_paths[i], path)) return;
+    if (pin_paths_seen >= PIN_PATHS) return;
+    snprintf(pin_paths[pin_paths_seen++], MAX_PATH, "%s", path);
+    char line[MAX_PATH + 64];
+    snprintf(line, sizeof(line), "pin: near character %s %s", path, gun ? "is the gun" : "stays as posed");
+    note(line);
+}
+
+static int pin_gun(void *instance) {
+    if (!instance) return 0;
+    void **slots = *(void ***)instance;
+    if (slots != pin_character_vtable) {
+        InterlockedIncrement(&pin_other_vtables);
+        return 0;
+    }
+    const char *path = ((const char *(*)(void *))slots[CHARACTER_PATH_SLOT])(instance);
+    if (!path) return 0;
+    int gun = has_word(path, "m4carbine") || has_word(path, "m4_runtime");
+    pin_note_path(path, gun);
+    return gun;
+}
+
+static void pin_goal(const float *joint, const double *rear, const double *front, double *goal) {
+    double low[3], high[3], d[3], line[3], upward[3], side[3];
+    dual_apply(joint, SIGHT_REAR, low);
+    dual_apply(joint, DOT_REAR, high);
+    for (int i = 0; i < 3; i++) {
+        d[i] = high[i] - low[i];
+        line[i] = front[i] - rear[i];
+    }
+    double size = sqrt(dot3(line, line));
+    for (int i = 0; i < 3; i++) line[i] /= size;
+    double along = dot3(d, line);
+    for (int i = 0; i < 3; i++) upward[i] = d[i] - along * line[i];
+    size = sqrt(dot3(upward, upward));
+    for (int i = 0; i < 3; i++) upward[i] /= size;
+    cross3(line, upward, side);
+    double axes[9] = {side[0], side[1], side[2], line[0], line[1], line[2], upward[0], upward[1], upward[2]};
+    quat_of_axes(axes, goal);
+}
+
+static void chase_quat(double *q, const double *target, double ease) {
+    double turn[3], part[4], next[4];
+    turn_between(target, q, turn);
+    for (int i = 0; i < 3; i++) turn[i] *= ease;
+    quat_of(turn, part);
+    quat_times(part, q, next);
+    double size = sqrt(next[0] * next[0] + next[1] * next[1] + next[2] * next[2] + next[3] * next[3]);
+    for (int i = 0; i < 4; i++) q[i] = next[i] / size;
+}
+
+static void sway_reset(int aimed) {
+    memset(sway_at, 0, sizeof(sway_at));
+    memset(sway_rate, 0, sizeof(sway_rate));
+    memset(sway_camera, 0, sizeof(sway_camera));
+    memset(sway_look, 0, sizeof(sway_look));
+    memset(sway_look_rate, 0, sizeof(sway_look_rate));
+    sway_aim = aimed;
+}
+
+static void sway_step(const float *camera, const double *right, const double *ahead, const double *up, double elapsed, int aimed) {
+    if (elapsed <= 0) return;
+    const double *axes[3] = {right, ahead, up}, *was[3] = {pin_last_right, pin_last_ahead, pin_last_up};
+    double dt = fmin(elapsed, PIN_DT_CAP_S), moved[3], accel[3], spin[3] = {0, 0, 0}, goal[3];
+    for (int i = 0; i < 3; i++) moved[i] = ((double)camera[i] - pin_last_camera[i]) / elapsed;
+    int jumped = elapsed > PIN_DT_CAP_S || sqrt(dot3(moved, moved)) > SWAY_TELEPORT_M_S;
+    double follow = jumped ? 0 : 1 - exp(-dt / SWAY_CAMERA_TAU_S);
+    for (int i = 0; i < 3; i++) {
+        accel[i] = follow * (moved[i] - sway_camera[i]) / dt;
+        sway_camera[i] += accel[i] * dt;
+    }
+    double hard = sqrt(dot3(accel, accel));
+    if (hard > SWAY_ACCEL_CAP)
+        for (int i = 0; i < 3; i++) accel[i] *= SWAY_ACCEL_CAP / hard;
+    for (int a = 0; a < 3; a++) {
+        double part[3];
+        cross3(was[a], axes[a], part);
+        for (int i = 0; i < 3; i++) spin[i] += 0.5 * part[i];
+    }
+    const double cap = SWAY_LOOK_CAP_DEG / DEGREES, lag = jumped ? 0 : m4_sway_look / 1000.0 / elapsed;
+    for (int a = 0; a < 3; a++) goal[a] = fmax(-cap, fmin(cap, -lag * dot3(spin, axes[a])));
+    double w = 2 * M_PI * m4_sway_hz / 100.0, gain = m4_sway_move / 100.0, lean = m4_sway_lean / 1000.0;
+    int steps = (int)ceil(dt / SWAY_STEP_S);
+    double h = dt / steps;
+    for (int s = 0; s < steps; s++) {
+        for (int i = 0; i < 3; i++) {
+            sway_rate[i] += h * (w * w * (-lean * sway_camera[i] - sway_at[i]) - gain * accel[i] - 2 * SWAY_DAMPING * w * sway_rate[i]);
+            sway_at[i] += h * sway_rate[i];
+            sway_look_rate[i] += h * (w * w * (goal[i] - sway_look[i]) - 2 * SWAY_DAMPING * w * sway_look_rate[i]);
+            sway_look[i] += h * sway_look_rate[i];
+        }
+    }
+    sway_aim += (1 - exp(-dt / PIN_TAU_S)) * (aimed - sway_aim);
+}
+
+static double sway_shown(void) {
+    return 1 + (m4_sway_aim / 100.0 - 1) * sway_aim;
+}
+
+static void sway_pose(const double *right, const double *ahead, const double *up, double *turn, double *move) {
+    double size = sqrt(dot3(sway_at, sway_at)), shown = sway_shown();
+    double keep = shown * (size > 0 ? SWAY_LIMIT_M * tanh(size / SWAY_LIMIT_M) / size : 1), tilt = m4_sway_tilt / DEGREES;
+    move[0] = dot3(sway_at, right) * keep;
+    move[1] = dot3(sway_at, ahead) * keep;
+    move[2] = dot3(sway_at, up) * keep;
+    turn[0] = tilt * (move[2] + SWAY_DIP * move[1]) + sway_look[0] * shown;
+    turn[1] = -tilt * SWAY_ROLL * move[0] + (sway_look[1] + SWAY_LOOK_ROLL * sway_look[2]) * shown;
+    turn[2] = -tilt * move[0] + sway_look[2] * shown;
+}
+
+static void pin_value(const double *gun, double scale, const float *joint, const double *rear, const double *front, const double *r,
+                      const float *camera, double now, double share, int stance, LONG frame, const double *right, const double *ahead,
+                      const double *up, double *value) {
+    const double *basis[3] = {right, ahead, up};
+    double axes[9], raw[4], goal[4], at[3], kicked[4], kick_turn[3] = {0, 0, 0}, kick_q[4], unused[3];
+    for (int a = 0; a < 3; a++) {
+        at[a] = dot3(r, basis[a]);
+        for (int k = 0; k < 3; k++) axes[3 * a + k] = (gun[k] * basis[a][0] + gun[3 + k] * basis[a][1] + gun[6 + k] * basis[a][2]) / scale;
+    }
+    quat_of_axes(axes, raw);
+    pin_goal(joint, rear, front, goal);
+    int stepping = pin_step_frame != frame, aimed = m4_aim_held();
+    double elapsed = pin_live ? now - pin_at : 0;
+    if (stepping) {
+        pin_step_frame = frame;
+        pin_at = now;
+        if (!pin_live) {
+            memcpy(pin_shown, raw, sizeof(raw));
+            memcpy(pin_mid, raw, sizeof(raw));
+            memcpy(pin_rear, at, sizeof(at));
+            memcpy(pin_mid_rear, at, sizeof(at));
+            sway_reset(aimed);
+            pin_chest = pin_wanted == PIN_SADDLE || m4_pin_body <= 0 ? 0 : 1;
+            pin_live = 1;
+        } else {
+            const double spot[3] = {aimed ? 0 : m4_hip_right / 1000.0, (aimed ? m4_aim_depth : m4_hip_ahead) / 1000.0,
+                                    aimed ? 0 : m4_hip_up / 1000.0};
+            double ease = 1 - exp(-fmin(elapsed, PIN_DT_CAP_S) / PIN_TAU_S);
+            chase_quat(pin_mid, goal, ease);
+            chase_quat(pin_shown, pin_mid, ease);
+            for (int i = 0; i < 3; i++) {
+                pin_mid_rear[i] += ease * (spot[i] - pin_mid_rear[i]);
+                pin_rear[i] += ease * (pin_mid_rear[i] - pin_rear[i]);
+            }
+            pin_chest_step(sqrt(pow(pin_rear[0] - at[0], 2) + pow(pin_rear[1] - at[1], 2) + pow(pin_rear[2] - at[2], 2)), elapsed);
+            sway_step(camera, right, ahead, up, elapsed, aimed);
+        }
+        saddle_kicked(m4_since_shot_ms());
+    }
+    double sway_turn[3], sway_move[3], hit[6] = {0, 0, 0, 0, 0, 0};
+    sway_pose(right, ahead, up, sway_turn, sway_move);
+    hit_flinch(now, sway_shown(), hit);
+    for (int i = 0; i < 3; i++) kick_turn[i] = sway_turn[i] + hit[i];
+    kick_turn[0] += saddle_kick * m4_saddle_lift / 100.0 / DEGREES;
+    quat_of(kick_turn, kick_q);
+    quat_times(kick_q, pin_shown, kicked);
+    double turned = turn_between(kicked, raw, value);
+    for (int i = 0; i < 3; i++) value[3 + i] = pin_rear[i] + sway_move[i] + hit[3 + i] - at[i];
+    value[4] -= saddle_kick * m4_saddle_push / 1000.0;
+    if (!stepping) return;
+    double raw_deg = turn_between(goal, raw, unused) * DEGREES, shown_deg = turn_between(goal, pin_shown, unused) * DEGREES;
+    double moved = sqrt(dot3(value + 3, value + 3)), walked = 0, spun = 0;
+    if (elapsed > 0) {
+        double step[3], spin[3];
+        for (int i = 0; i < 3; i++) step[i] = (double)camera[i] - pin_last_camera[i];
+        cross3(ahead, pin_last_ahead, spin);
+        walked = sqrt(dot3(step, step)) / elapsed;
+        spun = atan2(sqrt(dot3(spin, spin)), dot3(ahead, pin_last_ahead)) * DEGREES / elapsed;
+    }
+    for (int i = 0; i < 3; i++) {
+        pin_last_camera[i] = camera[i];
+        pin_last_right[i] = right[i];
+        pin_last_ahead[i] = ahead[i];
+        pin_last_up[i] = up[i];
+    }
+    pin_raw_peak = fmax(pin_raw_peak, raw_deg);
+    pin_turn_peak = fmax(pin_turn_peak, turned * DEGREES);
+    pin_move_peak = fmax(pin_move_peak, moved * 1000);
+    if (pin_rowed >= PIN_ROWS) return;
+    pin_row *row = &pin_rows[pin_rowed++];
+    *row = (pin_row){.at = now, .frame = frame, .dt = (float)(elapsed * 1000), .share = (float)share, .raw_deg = (float)raw_deg,
+                     .shown_deg = (float)shown_deg, .turn_deg = (float)(turned * DEGREES), .move_mm = (float)(moved * 1000),
+                     .speed = (float)walked, .view_s = (float)spun, .pitch = (float)(asin(fmax(-1, fmin(1, ahead[2]))) * DEGREES),
+                     .stance = stance, .aim = aimed};
+    for (int i = 0; i < 3; i++) {
+        row->raw_rear[i] = (float)(at[i] * 1000);
+        row->shown_rear[i] = (float)(pin_rear[i] * 1000);
+        row->sway_move[i] = (float)(sway_move[i] * 1000);
+        row->sway_turn[i] = (float)(sway_turn[i] * DEGREES);
+        row->chest = pin_chest;
+    }
+}
+
+static int pin_commit(const double *value, double share, const double *gun, double scale, const double *rear, const double *place,
+                      const double *right, const double *ahead, const double *up, void *instance, LONG frame, float *out) {
+    double turn[3], move[3];
+    sight_world(value, share, right, ahead, up, turn, move);
+    sight_commit(gun, scale, rear, place, turn, move, turn, move, 1, frame, out);
+    sight_instance = instance;
+    InterlockedIncrement(&pin_frames);
+    return 1;
+}
+
+static double sight_roll(const float *joint, const double *rear, const double *front, const double *gun, const double *turn,
+                         const double *right, const double *up) {
+    double low[3], high[3], d[3], line[3], upward[3], world[3], q[4], spun[3];
+    dual_apply(joint, SIGHT_REAR, low);
+    dual_apply(joint, DOT_REAR, high);
+    for (int i = 0; i < 3; i++) {
+        d[i] = high[i] - low[i];
+        line[i] = front[i] - rear[i];
+    }
+    double size = sqrt(dot3(line, line));
+    for (int i = 0; i < 3; i++) line[i] /= size;
+    double along = dot3(d, line), cap = SIGHT_ROLL_CAP_DEG / DEGREES;
+    for (int i = 0; i < 3; i++) upward[i] = d[i] - along * line[i];
+    for (int i = 0; i < 3; i++) world[i] = gun[3 * i] * upward[0] + gun[3 * i + 1] * upward[1] + gun[3 * i + 2] * upward[2];
+    quat_of(turn, q);
+    rotate(q, world, spun);
+    return fmax(-cap, fmin(cap, -atan2(dot3(spun, right), dot3(spun, up))));
+}
+
+static void roll_on_line(double *applied, const double *right, const double *ahead, const double *up) {
+    double turn[3], twist[3], q[4], tq[4], total[4];
+    for (int i = 0; i < 3; i++) {
+        turn[i] = applied[0] * right[i] + applied[2] * up[i];
+        twist[i] = applied[1] * ahead[i];
+    }
+    quat_of(turn, q);
+    quat_of(twist, tq);
+    quat_times(tq, q, total);
+    double sine = sqrt(total[0] * total[0] + total[1] * total[1] + total[2] * total[2]), angle = 2 * atan2(sine, total[3]);
+    for (int i = 0; i < 3; i++) turn[i] = sine > 1e-12 ? total[i] / sine * angle : 0;
+    applied[0] = dot3(turn, right);
+    applied[1] = dot3(turn, ahead);
+    applied[2] = dot3(turn, up);
+}
+
 static int sight_solved(const float *m, const float *view, const float *at, const float *camera, const double *world,
                         void *instance, LONG frame, float *out) {
     double gun[9] = {m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]};
     double right[3] = {view[0], view[4], view[8]}, ahead[3] = {view[1], view[5], view[9]}, up[3] = {view[2], view[6], view[10]};
     double scale = similar_scale(gun), now = sight_clock();
     int stance = m4_stance();
+    if ((stance & STANCE_CROUCHED) != sight_crouched) sight_stance_changed_at = now;
+    sight_crouched = stance & STANCE_CROUCHED;
+    int stance_locked = !(stance & STANCE_MOUNTED) && now - sight_stance_changed_at < SIGHT_STANCE_LOCK_S;
     sight_row row = {.at = now, .frame = frame, .instance = (int)(((ULONG_PTR)instance >> 4) & 0xffff), .held = m4_aim_held(),
                      .stance = stance, .camera = {camera[0], camera[1], camera[2]}, .stale = stale_total};
+    double share = pin_share(now, stance, frame), value[6];
+    if (share > 0 && !pin_gun(instance)) return 0;
     if (instance == sight_instance) {
         follow_tried = frame;
         gun_thread = GetCurrentThreadId();
@@ -742,6 +1160,11 @@ static int sight_solved(const float *m, const float *view, const float *at, cons
         r[i] = base + gun[3 * i] * rear[0] + gun[3 * i + 1] * rear[1] + gun[3 * i + 2] * rear[2];
         f[i] = base + gun[3 * i] * front[0] + gun[3 * i + 1] * front[1] + gun[3 * i + 2] * front[2];
     }
+    if (share > 0) pin_value(gun, scale, joint, rear, front, r, camera, now, share, stance, frame, right, ahead, up, value);
+    if (share >= 1) {
+        sight_active = sight_steady = 0;
+        return pin_commit(value, share, gun, scale, rear, place, right, ahead, up, instance, frame, out);
+    }
     double line[3] = {f[0] - r[0], f[1] - r[1], f[2] - r[2]}, length = sqrt(dot3(line, line)), reach = dot3(r, ahead);
     double dt = sight_active ? now - sight_last_at : 0, spin[3];
     cross3(ahead, sight_last_view, spin);
@@ -754,7 +1177,7 @@ static int sight_solved(const float *m, const float *view, const float *at, cons
     raising = raising && instance == sight_instance;
     if (length < 1e-6 || (beyond && !catching && !(raising && raise_live))) {
         unsolved_row(&row, ROW_OUT_OF_REACH, r, f, right, ahead, up, instance);
-        return 0;
+        return share > 0 ? pin_commit(value, share, gun, scale, rear, place, right, ahead, up, instance, frame, out) : 0;
     }
     double miss[3], axis[3];
     for (int i = 0; i < 3; i++) {
@@ -780,8 +1203,9 @@ static int sight_solved(const float *m, const float *view, const float *at, cons
     if (mounted) InterlockedIncrement(&sight_mounted);
     if (weight <= 0 && !easing) {
         if (instance == sight_instance) sight_active = sight_steady = 0;
+        sight_held[1] = 0;
         unsolved_row(&row, ROW_OFF_LINE, r, f, right, ahead, up, instance);
-        return 0;
+        return share > 0 ? pin_commit(value, share, gun, scale, rear, place, right, ahead, up, instance, frame, out) : 0;
     }
     double body[3];
     for (int i = 0; i < 3; i++) {
@@ -798,8 +1222,9 @@ static int sight_solved(const float *m, const float *view, const float *at, cons
     double pitch = asin(fmax(-1, fmin(1, ahead[2]))) * DEGREES;
     double at_bin = fmin(SIGHT_BINS - 1, fmax(0, (pitch + 90) / SIGHT_BIN_DEG)), turn[3];
     for (int i = 0; i < 3; i++) turn[i] = sine > 1e-12 ? axis[i] / sine * angle / DEGREES : 0;
-    double sample[6] = {dot3(turn, right), dot3(turn, ahead), dot3(turn, up), dot3(miss, right), dot3(miss, ahead), dot3(miss, up)};
-    double drift[3] = {sample[0] - sight_last_sample[0], sample[1] - sight_last_sample[1], sample[2] - sight_last_sample[2]};
+    int on_foot = !(stance & STANCE_MOUNTED);
+    double sample[6] = {dot3(turn, right), on_foot ? sight_roll(joint, rear, front, gun, turn, right, up) : 0, dot3(turn, up), dot3(miss, right), dot3(miss, ahead), dot3(miss, up)};
+    double drift[3] = {sample[0] - sight_last_sample[0], 0, sample[2] - sight_last_sample[2]};
     int turning = !(dt > 0 && turned < SIGHT_STEADY_DEG_S * dt);
     int swinging = !(dt > 0 && sqrt(dot3(drift, drift)) * DEGREES < SIGHT_GUN_DEG_S * dt);
     double since_shot = m4_since_shot_ms();
@@ -818,11 +1243,12 @@ static int sight_solved(const float *m, const float *view, const float *at, cons
     if (swinging) InterlockedIncrement(&sight_swinging);
     double target[6] = {0, 0, 0, 0, 0, 0}, ease = sight_active ? 1 - exp(-dt / SIGHT_EASE_S) : 1;
     if (!mounted) bin_value(kind, at_bin, target);
+    target[1] = 0;
     for (int i = 0; i < 6; i++) sight_eased[i] += ease * (target[i] - sight_eased[i]);
     if (!sight_active || !m4_aim_held()) sight_settled = 0;
-    else if (!off) sight_settled = 1;
+    else if (!off || stance_locked) sight_settled = 1;
     int following = (m4_precision & PRECISION_FOLLOW) && sight_settled;
-    double fast = following && mounted ? 1
+    double fast = following && (mounted || stance_locked) ? 1
                   : following && dt > 0 && !shooting
                       ? fmin(1, fmax(0, (turned / dt - SIGHT_FOLLOW_FROM_DEG_S) / (SIGHT_FOLLOW_FULL_DEG_S - SIGHT_FOLLOW_FROM_DEG_S)))
                       : 0;
@@ -834,13 +1260,18 @@ static int sight_solved(const float *m, const float *view, const float *at, cons
         sight_follow += (fast - sight_follow) * (1 - exp(-dt / SIGHT_FOLLOW_EASE_S));
     }
     int holding = (m4_precision & PRECISION_HOLD) && sight_settled;
-    double pull = holding ? 1 - exp(-dt / SIGHT_HOLD_S) : 0, applied[6];
+    double pull = holding ? 1 - exp(-dt / SIGHT_HOLD_S) : 0, roll_pull = 1 - exp(-dt / SIGHT_ROLL_S), applied[6];
     for (int i = 0; i < 6; i++) {
         double raw = sample[i] - sight_eased[i];
-        sight_held[i] = holding ? sight_held[i] + pull * (raw - sight_held[i]) : 0;
-        sight_held[i] = raw > 0 ? fmax(0, fmin(sight_held[i], raw)) : fmin(0, fmax(sight_held[i], raw));
+        if (i == 1) {
+            sight_held[1] += roll_pull * ((holding ? raw : 0) - sight_held[1]);
+        } else {
+            sight_held[i] = holding ? sight_held[i] + pull * (raw - sight_held[i]) : 0;
+            sight_held[i] = raw > 0 ? fmax(0, fmin(sight_held[i], raw)) : fmin(0, fmax(sight_held[i], raw));
+        }
         applied[i] = sight_eased[i] + sight_held[i] + sight_follow * (raw - sight_held[i]);
     }
+    if (on_foot) roll_on_line(applied, right, ahead, up);
     if (saddled && sight_follow > 0) steady_saddle(applied, gun, dt, catching ? saddle_reach : reach, reach, right, ahead, up);
     else saddle_steady = 0;
     if (raising && !stepped) {
@@ -855,6 +1286,7 @@ static int sight_solved(const float *m, const float *view, const float *at, cons
         applied[0] += kick * m4_saddle_lift / 100.0 / DEGREES;
         applied[4] -= kick * m4_saddle_push / 1000.0;
     }
+    hit_flinch(now, m4_sway_aim / 100.0, applied);
     if ((learned || since_shot < SIGHT_TRACE_AFTER_SHOT_MS || (dt > 0 && (turned / dt > SIGHT_FOLLOW_FROM_DEG_S || sight_follow > 0))) &&
         sight_traced < SIGHT_TRACE_FRAMES)
         sight_traces[sight_traced++] = (sight_trace){now, (float)(dt * 1000), (float)(-dot3(spin, up) * DEGREES),
@@ -878,17 +1310,15 @@ static int sight_solved(const float *m, const float *view, const float *at, cons
         sight_fixed_peak = fmax(sight_fixed_peak, front_miss(r, f, turn_world, move_world, right, ahead, up));
         sight_learned_peak = fmax(sight_learned_peak, front_miss(r, f, eased_turn, eased_move, right, ahead, up));
     }
-    model_dual(gun, scale, rear, eased_turn, eased_move, out);
-    float undo[8] = {-out[0], -out[1], -out[2], out[3], -out[4], -out[5], -out[6], out[7]};
-    model_dual(gun, scale, rear, turn_world, move_world, carry_duals[frame & 1]);
-    dual_times(carry_duals[frame & 1], undo);
-    memcpy(follow_duals[frame & 1], undo, sizeof(undo));
-    follow_frames[frame & 1] = frame;
-    placed_model *placed = &gun_placed[frame & 1];
-    memcpy(placed->axes, gun, sizeof(gun));
-    memcpy(placed->place, place, sizeof(place));
-    placed->scale = scale;
-    placed->frame = follow_tried = frame;
+    if (share > 0) {
+        double pin_turn[3], pin_move[3];
+        sight_world(value, share, right, ahead, up, pin_turn, pin_move);
+        for (int i = 0; i < 3; i++) {
+            eased_turn[i] = turn_world[i] = (1 - share) * turn_world[i] + pin_turn[i];
+            eased_move[i] = move_world[i] = (1 - share) * move_world[i] + pin_move[i];
+        }
+    }
+    sight_commit(gun, scale, rear, place, turn_world, move_world, eased_turn, eased_move, share > 0, frame, out);
     double screen[8];
     note_sight(r, f, turn_world, move_world, right, ahead, up, learned, screen);
     row.dt = (float)(dt * 1000);
@@ -987,16 +1417,91 @@ static void wait_for_gun(void) {
     if (waited > body_wait_peak) body_wait_peak = waited;
 }
 
-static int carry_of(LONG pick, LONG frame, float *out) {
+static int carry_of(LONG pick, LONG frame, float *out, double *pivot) {
     LONG paired = -1;
     for (LONG f = frame; f >= frame - 1 && paired < 0; f--)
         if (gun_placed[f & 1].frame == f && body_placed[f & 1].frame == f) paired = f;
     if (pick < 0 || paired < 0) return 0;
-    carried_dual(&gun_placed[paired & 1], &body_placed[paired & 1], carry_duals[pick & 1], out);
+    const placed_model *body = &body_placed[paired & 1];
+    carried_dual(&gun_placed[paired & 1], body, carry_duals[pick & 1], out);
+    for (int i = 0; i < 3; i++)
+        pivot[i] = -(body->axes[i] * body->place[0] + body->axes[3 + i] * body->place[1] + body->axes[6 + i] * body->place[2]) /
+                   (body->scale * body->scale);
     return 1;
 }
 
-static int follow_of(const void *instance, LONG kind, float *out, LONG *owed) {
+static void level_dual(const float *dual, const double *pivot, double share, float *out) {
+    double q[4] = {dual[0], dual[1], dual[2], dual[3]}, spun[3], shift[3], spin[3], part[4], at[3], t[3];
+    float moved[3];
+    translation_of(dual, moved);
+    if (q[3] < 0)
+        for (int i = 0; i < 4; i++) q[i] = -q[i];
+    rotate(q, pivot, spun);
+    double sine = sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]), angle = 2 * atan2(sine, q[3]);
+    for (int i = 0; i < 3; i++) {
+        shift[i] = spun[i] + moved[i] - pivot[i];
+        spin[i] = (sine > 1e-12 ? q[i] / sine * angle : 2 * q[i]) * share;
+    }
+    quat_of(spin, part);
+    rotate(part, pivot, at);
+    for (int i = 0; i < 3; i++) t[i] = pivot[i] - at[i] + share * shift[i];
+    dual_of(part, t, out);
+}
+
+static int joint_under(const short *parents, int joint, int above) {
+    while (joint >= 0 && joint != above) joint = parents[joint];
+    return joint == above;
+}
+
+static int pin_table_build(pin_table *table, void *skeleton, UINT32 joints) {
+    static short parents[MAX_SHIFTED_JOINTS];
+    void **slots = *(void ***)skeleton;
+    if (slots[SKELETON_PARENT_SLOT] != pin_parent_fn || slots[SKELETON_NAME_SLOT] != pin_name_fn) note("pin: this skeleton has its own parent or name function");
+    int (*parent_of)(void *, int) = (int (*)(void *, int))slots[SKELETON_PARENT_SLOT];
+    const char *(*name_of)(void *, int) = (const char *(*)(void *, int))slots[SKELETON_NAME_SLOT];
+    int hips = -1, spine = -1, hand = -1;
+    for (UINT32 j = 0; j < joints; j++) {
+        short parent = (short)parent_of(skeleton, (int)j);
+        const char *name = name_of(skeleton, (int)j);
+        if (parent >= (int)j || !name) return 0;
+        parents[j] = parent;
+        table->level[j] = parent >= 0 ? table->level[parent] : 0;
+        for (size_t n = 0; n < sizeof(JOINT_LEVELS) / sizeof(JOINT_LEVELS[0]); n++)
+            if (!strcmp(name, JOINT_LEVELS[n].name)) table->level[j] = JOINT_LEVELS[n].level;
+        if (!strcmp(name, "Hips")) hips = (int)j;
+        if (!strcmp(name, "Spine4")) spine = (int)j;
+        if (!strcmp(name, "RightHand")) hand = (int)j;
+    }
+    return hips >= 0 && spine >= 0 && hand >= 0 && joint_under(parents, hand, spine) && joint_under(parents, spine, hips);
+}
+
+static const unsigned char *pin_levels(void *skeleton, UINT32 joints) {
+    while (InterlockedCompareExchange(&sight_lock, 1, 0)) YieldProcessor();
+    pin_table *table = NULL;
+    for (int i = 0; i < PIN_TABLES && !table; i++)
+        if (pin_tables[i].skeleton == skeleton && pin_tables[i].joints == joints) table = &pin_tables[i];
+    int fresh = !table;
+    if (fresh) {
+        table = &pin_tables[pin_tables_next++ % PIN_TABLES];
+        table->skeleton = skeleton;
+        table->joints = joints;
+        table->ok = pin_table_build(table, skeleton, joints);
+    }
+    int ok = table->ok;
+    InterlockedExchange(&sight_lock, 0);
+    if (fresh) {
+        char line[128];
+        snprintf(line, sizeof(line), "pin: body skeleton %p has %u joints, %s", skeleton, joints, ok ? "levels ready" : "names or parents refused, the pin stays off");
+        note(line);
+    }
+    if (!ok) {
+        InterlockedExchange(&pin_ready, 0);
+        InterlockedIncrement(&pin_refused);
+    }
+    return ok ? table->level : NULL;
+}
+
+static int follow_of(const void *instance, LONG kind, float *out, LONG *owed, int *leveled, double *pivot) {
     int gun = kind == SHIFT_GUN && instance == sight_instance;
     if (!gun && kind != SHIFT_BODY) return 0;
     if (!gun) wait_for_gun();
@@ -1009,7 +1514,8 @@ static int follow_of(const void *instance, LONG kind, float *out, LONG *owed) {
         InterlockedIncrement(gun ? &first_gun : &first_body);
     }
     LONG pick = gun ? (follow_frames[frame & 1] == frame ? frame : -1) : follow_picked;
-    int ok = gun ? pick >= 0 : carry_of(pick, frame, out);
+    int ok = gun ? pick >= 0 : carry_of(pick, frame, out, pivot);
+    *leveled = ok && !gun && carry_leveled[pick & 1];
     if (ok && gun) memcpy(out, follow_duals[pick & 1], sizeof(follow_duals[0]));
     if (ok && !gun) InterlockedIncrement(pick == frame ? &follow_same : &follow_late);
     *owed = !gun && follow_tried != frame ? frame : -1;
@@ -1068,26 +1574,54 @@ typedef struct {
     LONG frame;
     UINT32 joints;
     float *quat, carry[8], shift[3];
+    int leveled;
+    double pivot[3];
+    const unsigned char *levels;
 } owed_body;
 
 static owed_body bodies_owed[BODY_OWED] = {{-1}, {-1}, {-1}, {-1}, {-1}, {-1}, {-1}, {-1}};
 
-static void refix_body(owed_body *owed) {
-    float fresh[8] = {0, 0, 0, 1, 0, 0, 0, 0}, fix[8] = {0, 0, 0, 1, 0, 0, 0, 0}, back[3];
-    float undo[8] = {-owed->carry[0], -owed->carry[1], -owed->carry[2], owed->carry[3],
-                     -owed->carry[4], -owed->carry[5], -owed->carry[6], owed->carry[7]};
-    for (int i = 0; i < 3; i++) back[i] = -owed->shift[i];
-    carry_of(follow_frames[owed->frame & 1] == owed->frame ? owed->frame : -1, owed->frame, fresh);
+static void refix_dual(const float *to, const float *from, const float *shift, float *fix) {
+    float undo[8] = {-from[0], -from[1], -from[2], from[3], -from[4], -from[5], -from[6], from[7]}, back[3];
+    for (int i = 0; i < 3; i++) back[i] = -shift[i];
+    for (int i = 0; i < 8; i++) fix[i] = i == 3;
     shift_dual_quat(fix, back);
     dual_times(undo, fix);
-    dual_times(fresh, fix);
-    shift_dual_quat(fix, owed->shift);
-    for (UINT32 j = 0; j < owed->joints; j++) dual_times(fix, owed->quat + 8 * j);
+    dual_times(to, fix);
+    shift_dual_quat(fix, shift);
+}
+
+static void refix_body(owed_body *owed) {
+    float fresh[8] = {0, 0, 0, 1, 0, 0, 0, 0};
+    double pivot[3] = {0, 0, 0};
+    LONG pick = follow_frames[owed->frame & 1] == owed->frame ? owed->frame : -1;
+    int leveled = carry_of(pick, owed->frame, fresh, pivot) && carry_leveled[pick & 1];
+    if ((leveled || owed->leveled) && !owed->levels) {
+        owed->frame = -1;
+        return;
+    }
+    if (leveled || owed->leveled) {
+        float fixes[PIN_LEVELS][8];
+        for (int k = 0; k < PIN_LEVELS; k++) {
+            float from[8], to[8];
+            if (owed->leveled) level_dual(owed->carry, owed->pivot, level_share(k), from);
+            else memcpy(from, owed->carry, sizeof(from));
+            if (leveled) level_dual(fresh, pivot, level_share(k), to);
+            else memcpy(to, fresh, sizeof(to));
+            refix_dual(to, from, owed->shift, fixes[k]);
+        }
+        for (UINT32 j = 0; j < owed->joints; j++) dual_times(fixes[owed->levels[j]], owed->quat + 8 * j);
+    } else {
+        float fix[8];
+        refix_dual(fresh, owed->carry, owed->shift, fix);
+        for (UINT32 j = 0; j < owed->joints; j++) dual_times(fix, owed->quat + 8 * j);
+    }
     owed->frame = -1;
     InterlockedIncrement(&body_refixed);
 }
 
-static void owe_body(LONG frame, float *quat, UINT32 joints, const float *carry, const float *shift) {
+static void owe_body(LONG frame, float *quat, UINT32 joints, const float *carry, const float *shift, int leveled, const double *pivot,
+                     const unsigned char *levels) {
     while (InterlockedCompareExchange(&sight_lock, 1, 0)) YieldProcessor();
     owed_body *owed = NULL;
     for (int i = 0; i < BODY_OWED && !owed; i++)
@@ -1100,6 +1634,9 @@ static void owe_body(LONG frame, float *quat, UINT32 joints, const float *carry,
         owed->quat = quat;
         memcpy(owed->carry, carry, sizeof(owed->carry));
         memcpy(owed->shift, shift, sizeof(owed->shift));
+        memcpy(owed->pivot, pivot, sizeof(owed->pivot));
+        owed->leveled = leveled;
+        owed->levels = levels;
         if (follow_tried == frame) refix_body(owed);
     }
     InterlockedExchange(&sight_lock, 0);
@@ -1152,8 +1689,23 @@ static void skinning_computed(unsigned char *context, const unsigned char *skinn
     }
     float carry[8] = {0, 0, 0, 1, 0, 0, 0, 0};
     LONG owed = -1;
-    if (follow_of(instance, kind, carry, &owed))
+    int leveled = 0;
+    double pivot[3] = {0, 0, 0};
+    int carried = follow_of(instance, kind, carry, &owed, &leveled, pivot);
+    const unsigned char *levels = kind == SHIFT_BODY && pin_ready ? pin_levels(skeleton, joints) : NULL;
+    if (carried && leveled && levels) {
+        float parts[PIN_LEVELS][8];
+        for (int k = 1; k < PIN_LEVELS; k++) level_dual(carry, pivot, level_share(k), parts[k]);
+        for (UINT32 j = 0; j < joints; j++)
+            if (levels[j]) dual_times(parts[levels[j]], quat + 8 * j);
+        InterlockedIncrement(&pin_level_skins);
+    } else if (carried && leveled) {
+        leveled = 0;
+        for (int i = 0; i < 8; i++) carry[i] = i == 3;
+    } else if (carried) {
         for (UINT32 j = 0; j < joints; j++) dual_times(carry, quat + 8 * j);
+        if (kind == SHIFT_BODY) InterlockedIncrement(&pin_rigid_skins);
+    }
     float before[3], after[3];
     translation_of(quat, before);
     for (UINT32 j = 0; j < joints; j++) shift_dual_quat(quat + 8 * j, d);
@@ -1164,7 +1716,7 @@ static void skinning_computed(unsigned char *context, const unsigned char *skinn
         if (off * off > error * error) error = off < 0 ? -off : off;
         shift_seen[kind][i] = d[i];
     }
-    if (owed >= 0) owe_body(owed, quat, joints, carry, d);
+    if (owed >= 0) owe_body(owed, quat, joints, carry, d, leveled, pivot, levels);
     joints_seen[kind] = joints;
     bones_seen[kind] = *(const UINT32 *)(skinning + SKINNING_BONES);
     unit_seen = quat[0] * quat[0] + quat[1] * quat[1] + quat[2] * quat[2] + quat[3] * quat[3];
@@ -1264,6 +1816,21 @@ static void report(void) {
     body_wait_peak = 0;
     double fixed_peak = sight_fixed_peak, learned_peak = sight_learned_peak;
     sight_fixed_peak = sight_learned_peak = 0;
+    LONG pinned = InterlockedExchange(&pin_frames, 0), level_skins = InterlockedExchange(&pin_level_skins, 0);
+    LONG rigid_skins = InterlockedExchange(&pin_rigid_skins, 0), other_vtables = InterlockedExchange(&pin_other_vtables, 0);
+    LONG refused = InterlockedExchange(&pin_refused, 0);
+    double raw_peak = pin_raw_peak, turn_peak = pin_turn_peak, move_peak = pin_move_peak;
+    pin_raw_peak = pin_turn_peak = pin_move_peak = 0;
+    if (pinned || refused) {
+        snprintf(line, sizeof(line),
+                 "pin: frames %ld ready %ld wanted %ld share %.2f | raw off the goal peak %.1f deg | correction peak %.1f deg %.0f mm"
+                 " | body skins leveled %ld rigid %ld refused %ld | gun skins lost %ld bare %ld rescued %ld stale %ld | other vtables %ld | hip %ld %ld %ld aim %ld | sway move %ld tilt %ld lean %ld look %ld aim %ld hz %ld",
+                 (long)pinned, (long)pin_ready, (long)pin_wanted, pin_share_value, raw_peak, turn_peak, move_peak, (long)level_skins,
+                 (long)rigid_skins, (long)refused, (long)gun_lost_n, (long)gun_bare_n, (long)gun_rescued_n, (long)stale, (long)other_vtables,
+                 (long)m4_hip_right, (long)m4_hip_ahead, (long)m4_hip_up, (long)m4_aim_depth, (long)m4_sway_move, (long)m4_sway_tilt, (long)m4_sway_lean,
+                 (long)m4_sway_look, (long)m4_sway_aim, (long)m4_sway_hz);
+        note(line);
+    }
     if (!frames && !mounted) return;
     double mean[8], sway[2];
     for (int i = 0; i < 8; i++) {
@@ -1356,6 +1923,44 @@ static void flush_rows(void) {
     fflush(row_file);
 }
 
+static void flush_pin_rows(void) {
+    static pin_row rows[PIN_ROWS];
+    while (InterlockedCompareExchange(&sight_lock, 1, 0)) YieldProcessor();
+    LONG count = pin_rowed;
+    memcpy(rows, pin_rows, sizeof(rows[0]) * count);
+    pin_rowed = 0;
+    InterlockedExchange(&sight_lock, 0);
+    if (!count) return;
+    if (!pin_file) {
+        char path[MAX_PATH];
+        snprintf(path, sizeof(path), "%s\\m4_pin.csv", game_root);
+        if (!(pin_file = fopen(path, "w"))) return;
+        fputs("at,frame,dt_ms,share,stance,aim,raw_deg,raw_right_mm,raw_ahead_mm,raw_up_mm,shown_deg,shown_right_mm,shown_ahead_mm,shown_up_mm,"
+              "turn_deg,move_mm,speed_m_s,view_deg_s,pitch_deg,sway_right_mm,sway_ahead_mm,sway_up_mm,sway_pitch_deg,sway_roll_deg,sway_yaw_deg,chest_share\n",
+              pin_file);
+    }
+    for (LONG i = 0; i < count; i++) {
+        const pin_row *row = &rows[i];
+        fprintf(pin_file, "%.4f,%ld,%.2f,%.3f,%d,%d,%.2f,%.1f,%.1f,%.1f,%.2f,%.1f,%.1f,%.1f,%.2f,%.1f,%.2f,%.1f,%.2f,%.2f,%.2f,%.2f,%.3f,%.3f,%.3f,%.3f\n", row->at, (long)row->frame,
+                row->dt, row->share, row->stance, row->aim, row->raw_deg, row->raw_rear[0], row->raw_rear[1], row->raw_rear[2], row->shown_deg,
+                row->shown_rear[0], row->shown_rear[1], row->shown_rear[2], row->turn_deg, row->move_mm, row->speed, row->view_s, row->pitch,
+                row->sway_move[0], row->sway_move[1], row->sway_move[2], row->sway_turn[0], row->sway_turn[1], row->sway_turn[2], row->chest);
+    }
+    fflush(pin_file);
+}
+
+static void pin_check(unsigned char *game) {
+    static const unsigned char PATH_BYTES[] = {0x48, 0x8b, 0x81, 0x38, 0x0a, 0x00, 0x00, 0xc3};
+    void **character = (void **)(game + CHARACTER_VTABLE_RVA), **skeleton = (void **)(game + SKELETON_VTABLE_RVA);
+    pin_character_vtable = character;
+    pin_parent_fn = game + SKELETON_PARENT_RVA;
+    pin_name_fn = game + SKELETON_NAME_RVA;
+    int ok = character[CHARACTER_PATH_SLOT] == game + CHARACTER_PATH_RVA && !memcmp(game + CHARACTER_PATH_RVA, PATH_BYTES, sizeof(PATH_BYTES)) &&
+             skeleton[SKELETON_PARENT_SLOT] == pin_parent_fn && skeleton[SKELETON_NAME_SLOT] == pin_name_fn;
+    InterlockedExchange(&pin_ready, ok);
+    note(ok ? "pin: character and skeleton tables match, the pin can run" : "pin: character or skeleton table mismatch, the pin stays off");
+}
+
 static void mark(LONG count) {
     sight_row row = {.at = sight_clock(), .why = ROW_MARK, .frame = count};
     while (InterlockedCompareExchange(&sight_lock, 1, 0)) YieldProcessor();
@@ -1371,6 +1976,7 @@ DWORD WINAPI precision_hook(LPVOID unused) {
     HMODULE game;
     while (!(game = GetModuleHandleA("WHGame.dll"))) Sleep(1);
     if (!precision_install((unsigned char *)game)) return 0;
+    pin_check((unsigned char *)game);
     LONG marks = 0;
     int held = 0;
     for (LONG tick = 1;; tick++) {
@@ -1378,7 +1984,10 @@ DWORD WINAPI precision_hook(LPVOID unused) {
         int down = (GetAsyncKeyState(MARK_KEY) & 0x8000) != 0;
         if (down && !held) mark(++marks);
         held = down;
-        if (tick % (ROW_FLUSH_MS / MARK_POLL_MS) == 0) flush_rows();
+        if (tick % (ROW_FLUSH_MS / MARK_POLL_MS) == 0) {
+            flush_rows();
+            flush_pin_rows();
+        }
         if (tick % (REPORT_MS / MARK_POLL_MS) == 0) report();
     }
 }

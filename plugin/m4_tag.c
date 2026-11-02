@@ -15,6 +15,7 @@ void put_jump(unsigned char *from, unsigned char *to, size_t length);
 #define ANCHOR_FRESH_MS 5000
 #define PROBED_LIMIT 16
 #define AIM_GAP_MS 250
+#define HIP_TAG_TAIL_MS 1200
 
 static const unsigned char SET_TAG_BYTES[] = {
     0x45, 0x8a, 0xd1, 0x4c, 0x8b, 0xd9, 0x45, 0x85, 0xc0, 0x78, 0x7c, 0x48, 0x8b, 0x49, 0x08, 0x44,
@@ -40,6 +41,10 @@ static volatile LONG horse_id = -1;
 static volatile LONG next_m4;
 static volatile LONG on_back;
 static volatile LONG m4next_id = -1;
+static volatile LONG m4light_id = -1;
+static volatile LONG light_on;
+static volatile LONG m4hip_id = -1;
+static volatile LONG64 hip_seen_at;
 static void *volatile probed[PROBED_LIMIT];
 static volatile LONG probed_count;
 
@@ -60,6 +65,7 @@ static int traced_bits[ANCHOR_LIMIT];
 
 double m4_since_shot_ms(void);
 int m4_aim_held(void);
+int m4_hip_held(void);
 
 static void log_tag(void *caller, unsigned char *def, unsigned char *state, int id, unsigned char value) {
     LONG64 key = ((LONG64)((unsigned char *)caller - game) << 20) ^ ((LONG64)id << 1) ^ (value != 0) ^ ((LONG64)(ULONG_PTR)def << 36);
@@ -169,10 +175,12 @@ static void resolve_male_def(void *def) {
     horse_id = ((get_tag_id_fn)(game + GET_TAG_ID_RVA))(def, "horse");
     m4hold_id = ((get_tag_id_fn)(game + GET_TAG_ID_RVA))(def, "m4hold");
     m4next_id = ((get_tag_id_fn)(game + GET_TAG_ID_RVA))(def, "m4next");
+    m4light_id = ((get_tag_id_fn)(game + GET_TAG_ID_RVA))(def, "m4light");
+    m4hip_id = ((get_tag_id_fn)(game + GET_TAG_ID_RVA))(def, "m4hip");
     male_def = def;
-    char line[192];
-    snprintf(line, sizeof(line), "tag: m4a1 id %d, m4aim id %ld, m4hold id %ld, charge id %ld, stealth id %ld, horse id %ld on def %p; injection live",
-             id, (long)m4aim_id, (long)m4hold_id, (long)charge_id, (long)stealth_id, (long)horse_id, def);
+    char line[224];
+    snprintf(line, sizeof(line), "tag: m4a1 id %d, m4aim id %ld, m4hold id %ld, m4light id %ld, m4hip id %ld, charge id %ld, stealth id %ld, horse id %ld on def %p; injection live",
+             id, (long)m4aim_id, (long)m4hold_id, (long)m4light_id, (long)m4hip_id, (long)charge_id, (long)stealth_id, (long)horse_id, def);
     note(line);
 }
 
@@ -186,7 +194,7 @@ static void write_aim(unsigned char *state, int slot, int armed) {
     LONG64 now = (LONG64)GetTickCount64();
     int charged = read_bit(male_def, state, (int)charge_id);
     if (charged) anchor_charged[slot] = now;
-    int held = charged || (anchor_charged[slot] && now - anchor_charged[slot] < AIM_GAP_MS && m4_aim_held());
+    int held = charged || (anchor_charged[slot] && now - anchor_charged[slot] < AIM_GAP_MS && (m4_aim_held() || m4_hip_held()));
     int crouched = stealth_id >= 0 && read_bit(male_def, state, (int)stealth_id);
     write_bit(male_def, state, (int)m4aim_id, armed && held && !crouched);
 }
@@ -197,6 +205,25 @@ static void write_hold(unsigned char *state, int armed) {
 
 static void write_next(unsigned char *state) {
     if (m4next_id >= 0) write_bit(male_def, state, (int)m4next_id, next_m4 != 0);
+}
+
+static void write_light(unsigned char *state, int armed) {
+    if (m4light_id < 0) return;
+    int crouched = stealth_id >= 0 && read_bit(male_def, state, (int)stealth_id);
+    write_bit(male_def, state, (int)m4light_id, armed && light_on && !crouched);
+}
+
+static void write_hip(unsigned char *state, int armed) {
+    if (m4hip_id < 0) return;
+    LONG64 now = (LONG64)GetTickCount64();
+    if (m4_hip_held()) hip_seen_at = now;
+    int mounted = horse_id >= 0 && read_bit(male_def, state, (int)horse_id);
+    write_bit(male_def, state, (int)m4hip_id, armed && !mounted && hip_seen_at && now - hip_seen_at < HIP_TAG_TAIL_MS && !m4_aim_held());
+}
+
+void m4_tag_light(int on) {
+    if (InterlockedExchange(&light_on, on != 0) != (on != 0))
+        note(on ? "tag: the M4 light is on; m4light follows" : "tag: the M4 light is off; m4light cleared");
 }
 
 void m4_tag_draw(int m4) {
@@ -223,17 +250,19 @@ static void track(void *def, unsigned char *state, int id, unsigned char value) 
     int armed = tag_armed != 0;
     write_bit(def, state, (int)m4a1_id, armed || on_back);
     write_hold(state, armed);
+    write_light(state, armed);
+    write_hip(state, armed);
     write_next(state);
     if (id == charge_id) write_aim(state, slot, armed);
     if (armed && InterlockedExchange(&inject_logged, 1) == 0)
         note("tag: m4a1 set on the player tag state");
 }
 
-static void __attribute__((noinline)) set_tag(unsigned char *def, unsigned char *state, int id, unsigned char value) {
+void __attribute__((noinline)) m4_set_tag(unsigned char *def, unsigned char *state, int id, unsigned char value, void *caller) {
     if (id < 0) return;
     unsigned char *entries = *(unsigned char **)(def + 8);
     if (id >= *(int *)(entries - 4)) return;
-    if (tag_armed) log_tag(__builtin_return_address(0), def, state, id, value);
+    if (tag_armed) log_tag(caller, def, state, id, value);
     write_bit(def, state, id, value);
     track(def, state, id, value);
     if (def == male_def && id == charge_id && m4_aim_held() && InterlockedIncrement(&trace_lines) <= 400) {
@@ -242,6 +271,21 @@ static void __attribute__((noinline)) set_tag(unsigned char *def, unsigned char 
                  (void *)state, anchor_index(def, state), m4aim_id >= 0 && read_bit(def, state, (int)m4aim_id), m4_since_shot_ms());
         note(line);
     }
+}
+
+__attribute__((naked)) static void set_tag(void) {
+    __asm__ volatile(
+        "push %rcx\n push %rdx\n push %r8\n push %r9\n push %r10\n push %r11\n push %rax\n"
+        "sub $0x90, %rsp\n"
+        "movdqu %xmm0, 0x30(%rsp)\n movdqu %xmm1, 0x40(%rsp)\n movdqu %xmm2, 0x50(%rsp)\n"
+        "movdqu %xmm3, 0x60(%rsp)\n movdqu %xmm4, 0x70(%rsp)\n movdqu %xmm5, 0x80(%rsp)\n"
+        "mov 0xc8(%rsp), %rax\n mov %rax, 0x20(%rsp)\n"
+        "call m4_set_tag\n"
+        "movdqu 0x30(%rsp), %xmm0\n movdqu 0x40(%rsp), %xmm1\n movdqu 0x50(%rsp), %xmm2\n"
+        "movdqu 0x60(%rsp), %xmm3\n movdqu 0x70(%rsp), %xmm4\n movdqu 0x80(%rsp), %xmm5\n"
+        "add $0x90, %rsp\n"
+        "pop %rax\n pop %r11\n pop %r10\n pop %r9\n pop %r8\n pop %rdx\n pop %rcx\n"
+        "ret\n");
 }
 
 void m4_tag_frame(void) {
@@ -275,6 +319,8 @@ void m4_tag_frame(void) {
         write_bit(male_def, anchor_state[i], (int)m4a1_id, armed);
         write_aim(anchor_state[i], (int)i, armed);
         write_hold(anchor_state[i], armed);
+        write_light(anchor_state[i], armed);
+        write_hip(anchor_state[i], armed);
         traced_bits[i] = read_bit(male_def, anchor_state[i], (int)charge_id) | (m4aim_id >= 0 ? read_bit(male_def, anchor_state[i], (int)m4aim_id) << 1 : 0);
     }
 }
@@ -315,6 +361,8 @@ void m4_tag_disarm(void) {
         write_bit(male_def, anchor_state[i], (int)m4a1_id, 1);
         if (m4aim_id >= 0) write_bit(male_def, anchor_state[i], (int)m4aim_id, 0);
         write_hold(anchor_state[i], 0);
+        if (m4light_id >= 0) write_bit(male_def, anchor_state[i], (int)m4light_id, 0);
+        if (m4hip_id >= 0) write_bit(male_def, anchor_state[i], (int)m4hip_id, 0);
         anchor_charged[i] = 0;
     }
     char line[160];

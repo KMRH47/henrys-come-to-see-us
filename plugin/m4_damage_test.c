@@ -7,6 +7,11 @@
 
 void m4_tag_draw(int m4) { (void)m4; }
 void m4_tag_drawn(int m4) { (void)m4; }
+void m4_pin_signal(int on) { (void)on; }
+void m4_hip_console(void *console, const char *name) { (void)console; (void)name; }
+void m4_pin_ease(void) {}
+void m4_hit_signal(double lost) { (void)lost; }
+void m4_tag_light(int on) { (void)on; }
 static unsigned escape_taps;
 volatile LONG m4_sight_dot;
 volatile LONG m4_sight_picking;

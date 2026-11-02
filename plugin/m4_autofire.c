@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <mmsystem.h>
 #include "m4_cadence.h"
+#include "m4_hip.h"
 
 
 #define LOG_POLL_MS 10
@@ -30,6 +31,9 @@ static volatile LONG RECOIL_FOLLOW_PERCENT = 20;
 static volatile LONG SHOT_VOLUME_PERCENT = 50;
 
 static volatile LONG physical_down = 0;
+static volatile LONG physical_aim = 0;
+static volatile LONG hip_takeover = 0;
+static HipHold hip;
 static volatile LONG armed = 0;
 static volatile LONG aim = AIM_NONE;
 static volatile LONG recharge = -1;
@@ -52,6 +56,8 @@ DWORD WINAPI ammo_hook(LPVOID unused);
 DWORD WINAPI sound_hook(LPVOID unused);
 DWORD WINAPI impact_hook(LPVOID unused);
 DWORD WINAPI mass_hook(LPVOID unused);
+DWORD WINAPI hip_hook(LPVOID unused);
+int m4_hip_free(void);
 DWORD WINAPI pitch_hook(LPVOID unused);
 DWORD WINAPI space_hook(LPVOID unused);
 DWORD WINAPI events_hook(LPVOID unused);
@@ -67,6 +73,10 @@ DWORD WINAPI qam_hook(LPVOID unused);
 DWORD WINAPI look_hook(LPVOID unused);
 extern volatile LONG m4_precision, m4_saddle_lift, m4_saddle_push, m4_saddle_ease, m4_saddle_rate, m4_damage_fixed, m4_attack_hundredths;
 extern volatile LONG m4_armour_near, m4_armour_far, m4_armour_floor;
+extern volatile LONG m4_hip_right, m4_hip_ahead, m4_hip_up, m4_aim_depth;
+extern volatile LONG m4_pin_body;
+extern volatile LONG m4_hit_gain;
+extern volatile LONG m4_sway_move, m4_sway_tilt, m4_sway_lean, m4_sway_look, m4_sway_aim, m4_sway_hz;
 void m4_tag_frame(void);
 static FILE *trace;
 
@@ -156,9 +166,15 @@ static LRESULT CALLBACK track_physical_button(int code, WPARAM message, LPARAM d
     if (code == HC_ACTION) {
         MSLLHOOKSTRUCT *event = (MSLLHOOKSTRUCT *)data;
         if (!(event->flags & LLMHF_INJECTED) && message == WM_RBUTTONDOWN) {
+            InterlockedExchange(&physical_aim, 1);
             if (armed) aim_pressed_at = milliseconds();
             SetEvent(engage);
+            if (hip.down) {
+                InterlockedExchange(&hip_takeover, 1);
+                return 1;
+            }
         } else if (!(event->flags & LLMHF_INJECTED) && message == WM_RBUTTONUP) {
+            InterlockedExchange(&physical_aim, 0);
             aim_pressed_at = 0;
         }
         if (!(event->flags & LLMHF_INJECTED) && (message == WM_LBUTTONDOWN || message == WM_LBUTTONUP)) {
@@ -248,6 +264,8 @@ static void apply_setting(const char *name, long value) {
         {"ease", &m4_saddle_ease}, {"rate", &m4_saddle_rate},
         {"damage", &m4_damage_fixed}, {"attack", &m4_attack_hundredths},
         {"near", &m4_armour_near}, {"far", &m4_armour_far}, {"floor", &m4_armour_floor},
+        {"hipright", &m4_hip_right}, {"hipahead", &m4_hip_ahead}, {"hipup", &m4_hip_up}, {"aimdepth", &m4_aim_depth},
+        {"hitgain", &m4_hit_gain}, {"pinbody", &m4_pin_body}, {"swaymove", &m4_sway_move}, {"swaytilt", &m4_sway_tilt}, {"swaylean", &m4_sway_lean}, {"swaylook", &m4_sway_look}, {"swayaim", &m4_sway_aim}, {"swayhz", &m4_sway_hz},
     };
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); ++i)
         if (strcmp(name, table[i].name) == 0) InterlockedExchange(table[i].slot, value);
@@ -479,6 +497,10 @@ int m4_aim_held(void) {
     return aim != AIM_NONE;
 }
 
+int m4_hip_held(void) {
+    return hip.down;
+}
+
 double m4_since_shot_ms(void) {
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
@@ -524,6 +546,8 @@ static DWORD WINAPI repeat_presses(LPVOID unused) {
         double aim_stamp = aim_pressed_at;
         int effective_aim = aim != AIM_READY && aim_stamp != 0 && now - aim_stamp <= CLICK_LATCH_MS ? AIM_RAISING : aim;
         if (effective_aim == AIM_RAISING && shot_at > (aim_stamp ? aim_stamp : aim_since)) effective_aim = AIM_READY;
+        int hip_allowed = enabled && aim == AIM_NONE && m4_hip_free(), hip_free = hip_allowed && !physical_aim;
+        if (hip_free || hip.down) effective_aim = AIM_READY;
         double charged_at = (double)InterlockedCompareExchange64(&charged_tick, 0, 0) * 1000 / frequency.QuadPart;
         CadenceInput input = {.now = now, .shot_at = shot_at, .frame_ms = now - ticked < 200 ? frame_time : 0, .charged_at = charged_at,
                               .frame = frames, .shot_frame = shot_frame, .clicks = clicks,
@@ -539,7 +563,23 @@ static DWORD WINAPI repeat_presses(LPVOID unused) {
             }
         }
         if (was_active && !state.active && press_count) report_presses();
-        if (state.active) wait_until(timer, now + 2);
+        if (InterlockedExchange(&hip_takeover, 0)) {
+            int taken = hip.down;
+            hip.down = 0;
+            hip.released_at = now;
+            if (taken) {
+                send_button(MOUSEEVENTF_RIGHTUP);
+                Sleep(40);
+            }
+            if (physical_aim) send_button(MOUSEEVENTF_RIGHTDOWN);
+            note("hip: the aim takes over the hip shot");
+        }
+        int hip_action = hip_step(&hip, now, shot_at, hip.down ? hip_allowed : hip_free, physical || state.latched);
+        if (hip_action != HIP_NONE) {
+            send_button(hip_action == HIP_PRESS ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP);
+            note(hip_action == HIP_PRESS ? "hip: charge held for a hip shot" : "hip: charge let go");
+        }
+        if (state.active || hip.down) wait_until(timer, now + 2);
         else WaitForSingleObject(engage, 50);
     }
     return 0;
@@ -570,6 +610,7 @@ static DWORD WINAPI start(LPVOID unused) {
     CreateThread(NULL, 0, sound_hook, NULL, 0, NULL);
     CreateThread(NULL, 0, impact_hook, NULL, 0, NULL);
     CreateThread(NULL, 0, mass_hook, NULL, 0, NULL);
+    CreateThread(NULL, 0, hip_hook, NULL, 0, NULL);
     CreateThread(NULL, 0, pitch_hook, NULL, 0, NULL);
     CreateThread(NULL, 0, space_hook, NULL, 0, NULL);
     CreateThread(NULL, 0, events_hook, NULL, 0, NULL);

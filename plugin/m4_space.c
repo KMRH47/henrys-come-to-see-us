@@ -58,19 +58,18 @@ unsigned char *m4_item_record(void *item) {
     return space_record(item);
 }
 
+int m4_actor_holds_m4(unsigned char *actor) {
+    unsigned char *slot = actor ? *(unsigned char **)(actor + 0x280) : NULL;
+    unsigned char *expansion = slot ? space_expand(slot) : NULL;
+    unsigned char *item = expansion ? *(unsigned char **)(expansion + 0x40) : NULL;
+    return item && m4_is_weapon_record(space_record(item));
+}
+
 static unsigned char space_blocked(unsigned char *ctrl) {
-    unsigned char *actor = *(unsigned char **)(ctrl + 0x18);
-    if (actor) {
-        unsigned char *slot = *(unsigned char **)(actor + 0x280);
-        unsigned char *expansion = slot ? space_expand(slot) : NULL;
-        if (expansion) {
-            unsigned char *item = *(unsigned char **)(expansion + 0x40);
-            if (item && m4_is_weapon_record(space_record(item))) {
-                if (!InterlockedExchange(&space_announced, 1))
-                    note("space: player M4 space test bypassed");
-                return 0;
-            }
-        }
+    if (m4_actor_holds_m4(*(unsigned char **)(ctrl + 0x18))) {
+        if (!InterlockedExchange(&space_announced, 1))
+            note("space: player M4 space test bypassed");
+        return 0;
     }
     return space_original(ctrl);
 }

@@ -232,7 +232,7 @@ function KCD2ForgeViewProbe.StartSight(config)
                 elseif state.aiming then
                     normal('aim_released')
                 end
-            elseif action=='gun_prepare' and activation=='press' and not state.aiming then
+            elseif action=='gun_prepare' and activation=='press' and not state.aiming and System.GetCVar('m4_hip_shot')~='1' then
                 start_aim(self)
             elseif action=='gun_execute' and activation=='press' and state.aiming then
                 if state.phase~='aim' then

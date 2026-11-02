@@ -1,0 +1,228 @@
+<FXLib>
+
+<Effect name="bullet_wicker">
+  <Audio trigger="c_mfx_bullet_wicker">
+  </Audio>
+		<RandEffect>
+			<Particle>
+				<Name direction="Normal" minscale="0.5" maxscale="0.6" maxscaledist="7" attach="1">collisions.destructibles.bullet_wood</Name>
+			</Particle>	
+		</RandEffect>
+		<RandEffect>
+			<Decal minscale="0.015" maxscale="0.018" lifetime="60">
+				<Material>Materials/decals/destructibles/decal_wood_02</Material>
+			</Decal>
+			<Decal minscale="0.0165" maxscale="0.0225" lifetime="60">
+				<Material>Materials/decals/destructibles/decal_wood_03</Material>
+			</Decal>
+		</RandEffect>
+</Effect>
+
+<Effect name="bullet_shield_wood">
+  <Audio trigger="c_mfx_bullet_shield_wood">
+  </Audio>
+		<RandEffect>
+			<Particle>
+				<Name direction="Normal" minscale="0.5" maxscale="0.6" maxscaledist="7" attach="1">collisions.destructibles.bullet_wood</Name>
+			</Particle>	
+		</RandEffect>
+		<RandEffect>
+			<Decal minscale="0.015" maxscale="0.018" lifetime="60">
+				<Material>Materials/decals/destructibles/decal_wood_02</Material>
+			</Decal>
+			<Decal minscale="0.0165" maxscale="0.0225" lifetime="60">
+				<Material>Materials/decals/destructibles/decal_wood_03</Material>
+			</Decal>
+		</RandEffect>
+</Effect>
+
+<Effect name="bullet_wood">
+  <Audio trigger="c_mfx_bullet_wood">
+  </Audio>
+		<RandEffect>
+			<Particle>
+				<Name direction="Normal" minscale="0.5" maxscale="0.6" maxscaledist="7" attach="1">collisions.destructibles.bullet_wood</Name>
+			</Particle>	
+		</RandEffect>
+		<RandEffect>
+			<Decal minscale="0.03" maxscale="0.045" lifetime="60">
+				<Material>Materials/decals/destructibles/decal_wood_02</Material>
+			</Decal>
+			<Decal minscale="0.03" maxscale="0.048" lifetime="60">
+				<Material>Materials/decals/destructibles/decal_wood_03</Material>
+			</Decal>
+		</RandEffect>
+</Effect>
+
+<Effect name="bullet_stone">
+  <Audio trigger="c_mfx_bullet_stone">
+  </Audio>
+		<RandEffect>
+			<Particle>
+				<Name direction="Normal" minscale="0.5" maxscale="0.6" maxscaledist="7" attach="1">m4a1.impact_stone</Name>
+			</Particle>	
+		</RandEffect>
+		<RandEffect>
+			<Decal minscale="0.03" maxscale="0.045" lifetime="60">
+				<Material>Materials/decals/destructibles/decal_plaster_01</Material>
+			</Decal>
+			<Decal minscale="0.03" maxscale="0.045" lifetime="60">
+				<Material>Materials/decals/destructibles/decal_plaster_02</Material>
+			</Decal>
+			<Decal minscale="0.03" maxscale="0.045" lifetime="60">
+				<Material>Materials/decals/destructibles/decal_plaster_03</Material>
+			</Decal>
+		</RandEffect>
+</Effect>
+
+<Effect name="bullet_ceramics">
+  <Audio trigger="c_mfx_bullet_ceramics">
+  </Audio>
+		<RandEffect>
+			<Particle>
+				<Name direction="Normal" minscale="0.5" maxscale="0.6" maxscaledist="7" attach="1">collisions.destructibles.bullet_ceramics</Name>
+			</Particle>	
+		</RandEffect>
+</Effect>
+
+<Effect name="bullet_sack">
+  <Audio trigger="c_mfx_bullet_sack">
+  </Audio>
+		<RandEffect>
+			<Particle>
+				<Name direction="Normal" minscale="0.5" maxscale="0.6" maxscaledist="7" attach="1">collisions.destructibles.bullet_sack</Name>
+			</Particle>	
+		</RandEffect>
+		<RandEffect>
+			<Decal minscale="0.0375" maxscale="0.0525" lifetime="60">
+				<Material>Materials/decals/destructibles/decal_fabric_01</Material>
+			</Decal>
+		</RandEffect>
+</Effect>
+
+<Effect name="bullet_fabric_items">
+	<RandEffect>
+		<Particle>
+			<Name direction="Reverse" minscale="0.5" maxscale="0.7" maxscaledist="10" attach="1">collisions.combat.hit_stopped_bullet_fabric</Name>
+		</Particle>	
+	</RandEffect>
+</Effect>
+
+<Effect name="bullet_metal">
+  <Audio trigger="c_mfx_bullet_metal">
+  </Audio>
+		<RandEffect>
+			<Particle>
+				<Name direction="Normal" minscale="0.55" maxscale="0.65" maxscaledist="7" attach="1">m4a1.impact_metal</Name>
+			</Particle>	
+		</RandEffect>
+		<RandEffect>
+			<Decal minscale="0.015" maxscale="0.03" lifetime="60">
+				<Material>Materials/decals/destructibles/decal_metal_01</Material>
+			</Decal>
+		</RandEffect>
+</Effect>
+
+<Effect name="bullet_plaster">
+  <Audio trigger="c_mfx_bullet_stone">
+  </Audio>
+		<RandEffect>
+			<Particle>
+				<Name direction="Normal" minscale="0.5" maxscale="0.6" maxscaledist="7" attach="1">m4a1.impact_plaster</Name>
+			</Particle>	
+		</RandEffect>
+		<RandEffect>
+			<Decal direction="Normal" minscale="0.03" maxscale="0.045" lifetime="60">
+				<Material>Materials/decals/destructibles/decal_plaster_01</Material>
+			</Decal>
+			<Decal direction="Normal" minscale="0.03" maxscale="0.045" lifetime="60">
+				<Material>Materials/decals/destructibles/decal_plaster_02</Material>
+			</Decal>
+			<Decal direction="Normal" minscale="0.03" maxscale="0.045" lifetime="60">
+				<Material>Materials/decals/destructibles/decal_plaster_03</Material>
+			</Decal>
+		</RandEffect>
+</Effect>
+
+<Effect name="bullet_straw">
+  <Audio trigger="c_mfx_bullet_straw">
+  </Audio>
+		<RandEffect>
+			<Particle>
+				<Name direction="Normal" minscale="0.5" maxscale="0.65" maxscaledist="7" attach="1">collisions.destructibles.bullet_straw</Name>
+			</Particle>	
+		</RandEffect>
+		<RandEffect>
+			<Decal direction="Normal" minscale="0.018" maxscale="0.03" lifetime="60">
+				<Material>Materials/decals/destructibles/decal_straw</Material>
+			</Decal>
+		</RandEffect>
+</Effect>
+
+<Effect name="bullet_soil">
+  <Audio trigger="c_mfx_bullet_soil">
+  </Audio>
+		<RandEffect>
+			<Particle>
+				<Name direction="Normal" minscale="0.45" maxscale="0.55" maxscaledist="7" attach="1">collisions.destructibles.bullet_soil</Name>
+			</Particle>	
+		</RandEffect>
+		<RandEffect>
+			<Decal minscale="0.0375" maxscale="0.0525" lifetime="60">
+				<Material>Materials/decals/destructibles/decal_soil_01</Material>
+			</Decal>
+		</RandEffect>
+</Effect>
+
+<Effect name="bullet_mud">
+  <Audio trigger="c_mfx_bullet_mud">
+  </Audio>
+		<RandEffect>
+			<Particle>
+				<Name direction="Normal" minscale="0.45" maxscale="0.55" maxscaledist="7" attach="1">collisions.destructibles.bullet_mud</Name>
+			</Particle>	
+		</RandEffect>
+		<RandEffect>
+			<Decal minscale="0.03" maxscale="0.045" lifetime="60">
+				<Material>Materials/decals/destructibles/decal_mud_01</Material>
+			</Decal>
+		</RandEffect>
+</Effect>
+
+<Effect name="bullet_mudwater">
+  <Audio trigger="c_mfx_bullet_mud">
+  </Audio>
+		<RandEffect>
+			<Particle>
+				<Name direction="Normal" minscale="0.45" maxscale="0.55" maxscaledist="7" attach="1">collisions.destructibles.bullet_mudwater</Name>
+			</Particle>	
+		</RandEffect>
+</Effect>
+
+<Effect name="bullet_grass">
+		<Sound>
+			<Name>sounds/environment:combat/material:arrow_grass</Name>
+		</Sound>
+		<RandEffect>
+			<Particle>
+				<Name direction="Normal" minscale="0.45" maxscale="0.55" maxscaledist="7" attach="1">collisions.destructibles.bullet_grass</Name>
+			</Particle>	
+		</RandEffect>
+				<RandEffect>
+			<Decal minscale="0.0375" maxscale="0.0525" lifetime="60">
+				<Material>Materials/decals/destructibles/decal_soil_01</Material>
+			</Decal>
+		</RandEffect>
+</Effect>
+
+<Effect name="bullet_water">
+  <Audio trigger="c_mfx_bullet_water">
+  </Audio>
+		<RandEffect>
+			<Particle>
+				<Name direction="Normal" minscale="0.45" maxscale="0.55" maxscaledist="7" attach="1">collisions.destructibles.bullet_mudwater</Name>
+			</Particle>	
+		</RandEffect>
+</Effect>
+
+</FXLib>

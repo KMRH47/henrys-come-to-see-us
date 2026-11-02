@@ -10,6 +10,9 @@ unsigned char *emit_jump(unsigned char *at, void *target);
 void put_call(unsigned char *from, unsigned char *to, size_t length);
 void put_jump(unsigned char *from, unsigned char *to, size_t length);
 unsigned char *m4_item_record(void *item);
+int m4_hip_held(void);
+int m4_hip_air(void);
+int m4_actor_holds_m4(unsigned char *actor);
 
 #define DRAW_AIM_START_RVA 0x2ace880
 static const unsigned char DRAW_AIM_START_BYTES[] = {0x48, 0x8b, 0xc1, 0x48, 0x8b, 0x49, 0x50, 0x48, 0x85, 0xc9};
@@ -23,6 +26,13 @@ static const unsigned char DRAW_YIELD_BYTES[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0
 #define AIM_ACTION_VTABLE_RVA 0x3e7b1b0
 #define DRAW_LOGIC_VTABLE_RVA 0x3a5b7d0
 #define DRAW_LOGIC_ATTACHED 0
+#define AIR_LINES 60
+#define AIR_KEEP_LINE_MS 300
+#define AIM_YIELD_SLOT_RVA 0x3e7b1e8
+#define FALL_ACTION_VTABLE_RVA 0x3ac2030
+#define LAND_ACTION_VTABLE_RVA 0x3a4ad90
+
+static const unsigned int AIR_YIELD_SLOTS[] = {0x3b51bc8, 0x3ac2068, 0x3a4adc8};
 
 static const struct { size_t rva; const unsigned char *bytes; size_t length; } draw_signatures[] = {
     {DRAW_AIM_START_RVA, DRAW_AIM_START_BYTES, sizeof(DRAW_AIM_START_BYTES)},
@@ -35,11 +45,18 @@ static unsigned char *draw_game;
 static ULONG_PTR (*aim_start_original)(unsigned char *);
 static unsigned char (*yield_original)(unsigned char *, unsigned char **);
 static int m4_aim_starting;
+static volatile LONG air_lines;
 
 static ULONG_PTR aim_start(unsigned char *expansion) {
     unsigned char *item = *(unsigned char **)(expansion + 0x40);
     m4_aim_starting = item && m4_is_weapon_record(m4_item_record(item));
+    int fresh = !*(unsigned char **)(expansion + 0x50);
     ULONG_PTR result = aim_start_original(expansion);
+    if (fresh && m4_aim_starting && m4_hip_air() && InterlockedIncrement(&air_lines) <= AIR_LINES) {
+        char line[96];
+        snprintf(line, sizeof(line), "air: new aim returned %d, hip %d", (int)(result & 0xff), m4_hip_held());
+        note(line);
+    }
     m4_aim_starting = 0;
     return result;
 }
@@ -54,6 +71,58 @@ static unsigned char draw_yields(unsigned char *self, unsigned char **next) {
     snprintf(line, sizeof(line), "draw: M4 aim %s the draw, state %d", state == DRAW_LOGIC_ATTACHED ? "replaced" : "waits for", state);
     note(line);
     return state == DRAW_LOGIC_ATTACHED;
+}
+
+static unsigned char air_yields(unsigned char *self, unsigned char **next) {
+    if (yield_original(self, next)) return 1;
+    if (!m4_aim_starting || !m4_hip_air() || !*next || *(unsigned char **)*next != draw_game + AIM_ACTION_VTABLE_RVA) return 0;
+    if (InterlockedIncrement(&air_lines) <= AIR_LINES) {
+        char line[96];
+        snprintf(line, sizeof(line), "air: aim replaces action WHGame+0x%zx", (size_t)(*(unsigned char **)self - draw_game));
+        note(line);
+    }
+    return 1;
+}
+
+static unsigned char aim_yields(unsigned char *self, unsigned char **next) {
+    unsigned char *wanted = *next ? *(unsigned char **)*next : NULL;
+    if (wanted != draw_game + FALL_ACTION_VTABLE_RVA && wanted != draw_game + LAND_ACTION_VTABLE_RVA) return yield_original(self, next);
+    unsigned char *owner = *(unsigned char **)(self + 0x58);
+    unsigned char *actor = owner ? (*(unsigned char *(**)(unsigned char *))(*(unsigned char **)owner + 0x10))(owner) : NULL;
+    if (!m4_actor_holds_m4(actor)) return yield_original(self, next);
+    static ULONGLONG air_kept_at;
+    ULONGLONG now = GetTickCount64();
+    if (now - air_kept_at >= AIR_KEEP_LINE_MS && InterlockedIncrement(&air_lines) <= AIR_LINES) {
+        air_kept_at = now;
+        char line[96];
+        snprintf(line, sizeof(line), "air: aim keeps against action WHGame+0x%zx", (size_t)(wanted - draw_game));
+        note(line);
+    }
+    return 0;
+}
+
+static void set_slot(unsigned char **slot, void *hook) {
+    DWORD old;
+    VirtualProtect(slot, sizeof(*slot), PAGE_READWRITE, &old);
+    *slot = hook;
+    VirtualProtect(slot, sizeof(*slot), old, &old);
+}
+
+static void air_install(unsigned char *game) {
+    if (*(unsigned char **)(game + AIM_YIELD_SLOT_RVA) != game + DRAW_YIELD_RVA) {
+        note("air: aim slot mismatch; a hip press in the air stays refused");
+        return;
+    }
+    for (size_t i = 0; i < sizeof(AIR_YIELD_SLOTS) / sizeof(AIR_YIELD_SLOTS[0]); i++) {
+        if (*(unsigned char **)(game + AIR_YIELD_SLOTS[i]) != game + DRAW_YIELD_RVA) {
+            note("air: vtable slot mismatch; a hip press in the air stays refused");
+            return;
+        }
+    }
+    for (size_t i = 0; i < sizeof(AIR_YIELD_SLOTS) / sizeof(AIR_YIELD_SLOTS[0]); i++)
+        set_slot((unsigned char **)(game + AIR_YIELD_SLOTS[i]), (void *)air_yields);
+    set_slot((unsigned char **)(game + AIM_YIELD_SLOT_RVA), (void *)aim_yields);
+    note("air: an M4 aim may replace a jump, fall or land");
 }
 
 static int draw_install(unsigned char *game) {
@@ -78,10 +147,8 @@ static int draw_install(unsigned char *game) {
     yield_original = (void *)(game + DRAW_YIELD_RVA);
     emit_jump(entry, (void *)aim_start);
     FlushInstructionCache(GetCurrentProcess(), entry, 14);
-    DWORD old;
-    VirtualProtect(slot, sizeof(*slot), PAGE_READWRITE, &old);
-    *slot = (unsigned char *)draw_yields;
-    VirtualProtect(slot, sizeof(*slot), old, &old);
+    set_slot(slot, (void *)draw_yields);
+    air_install(game);
     put_jump(game + DRAW_PRESS_JUMP_RVA, entry, 5);
     put_call(game + DRAW_READY_CALL_RVA, entry, 5);
     note("draw: M4 aim may replace an attached draw");

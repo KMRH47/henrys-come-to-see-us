@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <tlhelp32.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "m4_weapon.h"
 
@@ -56,6 +57,13 @@ int m4_is_ammo_record(const unsigned char *record);
 #define SIGHT_PICK_CVAR "m4_sight_pick"
 #define DOLL_START_CVAR "m4_doll_start"
 #define DOLL_STOP_CVAR "m4_doll_stop"
+#define LIGHT_ON_CVAR "m4_light_on"
+#define LIGHT_OFF_CVAR "m4_light_off"
+#define PIN_ON_CVAR "m4_pin_on"
+#define PIN_OFF_CVAR "m4_pin_off"
+#define PIN_SADDLE_CVAR "m4_pin_saddle"
+#define PIN_EASE_CVAR "m4_pin_ease"
+#define HIT_PREFIX "m4_hit "
 #define DOLL_LINE "m4_doll_tick"
 #define DOLL_TIMER 0x4d34
 #define DOLL_TIMER_MS 10
@@ -254,6 +262,11 @@ static unsigned char *damage_game;
 void m4_qam_console(void *console);
 void m4_tap_escape(void);
 extern volatile LONG m4_sight_dot;
+void m4_tag_light(int on);
+void m4_pin_signal(int on);
+void m4_hip_console(void *console, const char *name);
+void m4_pin_ease(void);
+void m4_hit_signal(double lost);
 extern volatile LONG m4_sight_picking;
 static unsigned char *(*damage_record)(void *);
 static unsigned char *(*damage_item)(unsigned char *);
@@ -467,8 +480,19 @@ void *m4_console_get(void *console, const char *name) {
         if (name && !strcmp(name, SIGHT_DOT_CVAR)) InterlockedExchange(&m4_sight_dot, 1);
         if (name && !strcmp(name, SIGHT_IRONS_CVAR)) InterlockedExchange(&m4_sight_dot, 0);
         if (name && !strcmp(name, SIGHT_PICK_CVAR)) InterlockedExchange(&m4_sight_picking, 1);
-        if (name && !strcmp(name, DOLL_START_CVAR)) doll_timer(1);
+        if (name && !strcmp(name, DOLL_START_CVAR)) {
+            doll_timer(1);
+            m4_pin_signal(0);
+        }
         if (name && !strcmp(name, DOLL_STOP_CVAR)) doll_timer(0);
+        if (name && !strcmp(name, LIGHT_ON_CVAR)) m4_tag_light(1);
+        if (name && !strcmp(name, LIGHT_OFF_CVAR)) m4_tag_light(0);
+        if (name && !strcmp(name, PIN_ON_CVAR)) m4_pin_signal(1);
+        if (name && !strcmp(name, PIN_OFF_CVAR)) m4_pin_signal(0);
+        if (name && !strcmp(name, PIN_SADDLE_CVAR)) m4_pin_signal(2);
+        if (name && !strcmp(name, PIN_EASE_CVAR)) m4_pin_ease();
+        if (name && !strncmp(name, HIT_PREFIX, sizeof(HIT_PREFIX) - 1)) m4_hit_signal(atof(name + sizeof(HIT_PREFIX) - 1));
+        m4_hip_console(console, name);
     }
     return console_get(console, name);
 }
