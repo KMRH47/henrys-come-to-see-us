@@ -44,5 +44,7 @@
 		</ATLTrigger>
 		<ATLTrigger atl_name="c_f_m4a1_light" path="c_w_firearms">
 		</ATLTrigger>
+		<ATLTrigger atl_name="c_f_m4a1_selector" path="c_w_firearms">
+		</ATLTrigger>
 	</AudioTriggers>
 </ATLConfig>

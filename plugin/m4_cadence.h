@@ -10,13 +10,13 @@ enum { AIM_NONE, AIM_RAISING, AIM_READY };
 #define FIRST_LAG_FRAMES 4
 
 typedef struct {
-    double now, shot_at, frame_ms, charged_at;
+    double now, shot_at, frame_ms, charged_at, click_at;
     long frame, shot_frame, clicks;
-    int physical, enabled, aim, game_down;
+    int physical, enabled, aim, game_down, single;
 } CadenceInput;
 
 typedef struct {
-    int active, down, waiting, latched, freed;
+    int active, down, waiting, latched, freed, spent;
     long clicks, every, lag, pressed_frame, press_frame, release_frame;
     double requested, release_at, deadline, observed, clicked_at, slot;
 } Cadence;
@@ -26,6 +26,7 @@ typedef struct {
 static int cadence_step(Cadence *state, const CadenceInput *in, double period, double gap) {
     double now = in->now, shot_at = in->shot_at;
     int framed = in->frame_ms > 0;
+    int answered = in->single && in->click_at > 0 && shot_at >= in->click_at;
     if (!in->enabled) {
         int action = CADENCE_NONE;
         if (state->active && state->down && !in->physical) action = CADENCE_UP;
@@ -35,7 +36,8 @@ static int cadence_step(Cadence *state, const CadenceInput *in, double period, d
     }
     if (in->clicks != state->clicks) {
         state->clicks = in->clicks;
-        if (in->aim != AIM_NONE) {
+        state->spent = answered;
+        if (in->aim != AIM_NONE && !answered) {
             state->latched = 1;
             state->freed = 0;
             state->clicked_at = now;
@@ -52,8 +54,12 @@ static int cadence_step(Cadence *state, const CadenceInput *in, double period, d
         if (in->game_down) {
             *state = (Cadence){.active = 1, .release_at = now, .release_frame = in->frame, .press_frame = in->frame + 2,
                                .deadline = now + gap, .observed = shot_at, .clicks = in->clicks,
-                               .latched = state->latched, .clicked_at = state->clicked_at};
+                               .latched = state->latched, .clicked_at = state->clicked_at, .spent = answered};
             return CADENCE_UP;
+        }
+        if (answered) {
+            *state = (Cadence){.active = 1, .spent = 1, .observed = shot_at, .clicks = in->clicks};
+            return CADENCE_NONE;
         }
         *state = (Cadence){.active = 1, .down = 1, .waiting = 1, .requested = now, .slot = now, .observed = shot_at,
                            .pressed_frame = in->frame, .clicks = in->clicks, .latched = state->latched,
@@ -79,6 +85,7 @@ static int cadence_step(Cadence *state, const CadenceInput *in, double period, d
             state->press_frame = in->shot_frame + (state->every > state->lag ? state->every - state->lag : 1);
         }
         if (shot_at >= state->clicked_at) state->latched = 0;
+        if (in->single) state->spent = 1;
     }
     if (state->down) {
         // The button stays down until the shot has landed. A release the game
@@ -96,6 +103,7 @@ static int cadence_step(Cadence *state, const CadenceInput *in, double period, d
         }
         return CADENCE_UP;
     }
+    if (in->single && state->spent) return CADENCE_NONE;
     // The game must read the button up once between two presses, or it sees one
     // long press, so a press waits two frame marks after the release.
     int uncharged = in->charged_at > 0 && in->charged_at < state->observed && now - state->observed < 1.5 * period;

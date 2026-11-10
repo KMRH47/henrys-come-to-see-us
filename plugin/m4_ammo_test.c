@@ -28,7 +28,8 @@ typedef struct {
     double from, to, shot;
     int physical;
     long clicks;
-    int enabled, aim;
+    int enabled, aim, single;
+    double click_at;
 } Span;
 
 // Steps the cadence one millisecond at a time through each span and compares
@@ -39,7 +40,8 @@ static void expect_presses(Cadence *cadence, const Span *spans, size_t count, co
     for (size_t i = 0; i < count; i++)
         for (double now = spans[i].from; now < spans[i].to; now += 1) {
             CadenceInput input = {.now = now, .shot_at = spans[i].shot, .clicks = spans[i].clicks,
-                                  .physical = spans[i].physical, .enabled = spans[i].enabled, .aim = spans[i].aim};
+                                  .physical = spans[i].physical, .enabled = spans[i].enabled, .aim = spans[i].aim,
+                                  .single = spans[i].single, .click_at = spans[i].click_at};
             int action = cadence_step(cadence, &input, 100, 45);
             if (action != CADENCE_NONE)
                 used += snprintf(seen + used, sizeof(seen) - used, "%s%c%.0f", used ? " " : "",
@@ -347,6 +349,25 @@ int main(void) {
     expect_presses(&cadence, unaimed, COUNT(unaimed), "D6000 U6020 D7000 U7010 D8000 D10000 U10001");
     require(!cadence.active);
     puts("PASS: unaimed clicks pass straight through; a new raise lifts the button; disarm hands the button back and clicks made while disarmed never fire later");
+    static const struct { const char *name; Span spans[6]; size_t count; const char *expected; } singles[] = {
+        {"a held trigger fires once", {{11000, 11010, 3300, 1, 9, 1, AIM_READY, 1}, {11010, 11600, 11010, 1, 9, 1, AIM_READY, 1},
+                                      {11600, 11610, 11010, 0, 9, 1, AIM_READY, 1}}, 3, "D11000 U11045"},
+        {"the next click fires once more", {{12000, 12010, 11010, 1, 10, 1, AIM_READY, 1}, {12010, 12600, 12010, 1, 10, 1, AIM_READY, 1},
+                                           {12600, 12610, 12010, 0, 10, 1, AIM_READY, 1}}, 3, "D12000 U12045"},
+        {"a refused press retries until its one shot", {{13000, 13400, 12010, 1, 11, 1, AIM_READY, 1}, {13400, 13900, 13400, 1, 11, 1, AIM_READY, 1},
+                                                       {13900, 13910, 13400, 0, 11, 1, AIM_READY, 1}}, 3, "D13000 U13250 D13295 U13400"},
+        {"an unaimed held trigger fires once", {{14000, 14010, 13400, 1, 12, 1, AIM_NONE, 1}, {14010, 14600, 14010, 1, 12, 1, AIM_NONE, 1},
+                                               {14600, 14610, 14010, 0, 12, 1, AIM_NONE, 1}}, 3, "D14000 U14045"},
+        {"full auto again repeats the held trigger", {{15000, 15010, 14010, 1, 13, 1, AIM_READY, 0}, {15010, 15190, 15010, 1, 13, 1, AIM_READY, 0},
+                                                     {15190, 15200, 15010, 0, 13, 1, AIM_READY, 0}}, 3, "D15000 U15045 D15100 U15190"},
+        {"a click the game answers first fires no second shot", {{16010, 16600, 16005, 1, 14, 1, AIM_READY, 1, 16000},
+                                                              {16600, 16610, 16005, 0, 14, 1, AIM_READY, 1, 16000}}, 2, ""},
+    };
+    for (size_t i = 0; i < COUNT(singles); i++) {
+        expect_presses(&cadence, singles[i].spans, singles[i].count, singles[i].expected);
+        require(!cadence.active && !cadence.spent);
+        printf("PASS: single shot: %s\n", singles[i].name);
+    }
     expect_first_shot();
     expect_ready_after_shot();
     expect_stuck_button_released();

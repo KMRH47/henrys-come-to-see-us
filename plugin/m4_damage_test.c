@@ -1,6 +1,7 @@
 #include "m4_ammo.c"
 #include "m4_damage.c"
 #include "m4_qam.c"
+#include "m4_selector.c"
 #include <stdlib.h>
 
 #define require(condition) do { if (!(condition)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #condition); exit(1); } } while (0)
@@ -102,11 +103,15 @@ static void fake_clear_flags(void *cvar, int flags) {
     require(cvar == &fake_cvar_object && flags == CVAR_CHEAT_FLAGS);
     clear_calls++;
 }
-static void *fake_qam_object;
-static char qam_seen[32];
+static void *fake_qam_object, *fake_selector_object;
+static char qam_seen[32], selector_seen[16];
 static void fake_set_string(void *cvar, const char *text) {
     if (cvar == &fake_qam_object) {
         snprintf(qam_seen, sizeof(qam_seen), "%s", text);
+        return;
+    }
+    if (cvar == &fake_selector_object) {
+        snprintf(selector_seen, sizeof(selector_seen), "%s", text);
         return;
     }
     require(cvar == &fake_cvar_object);
@@ -119,6 +124,10 @@ static void *fake_register_string(void *console, const char *name, const char *v
     if (!strcmp(name, QAM_CVAR)) {
         snprintf(qam_seen, sizeof(qam_seen), "%s", value);
         return &fake_qam_object;
+    }
+    if (!strcmp(name, SELECTOR_CVAR)) {
+        snprintf(selector_seen, sizeof(selector_seen), "%s", value);
+        return &fake_selector_object;
     }
     require(!strcmp(name, HEAD_CVAR));
     register_calls++;
@@ -492,6 +501,7 @@ int main(void) {
     void *console_object = console_table, *other_object = cvar_table;
     fake_cvar_object = cvar_table;
     fake_qam_object = cvar_table;
+    fake_selector_object = cvar_table;
     void **console_global = (void **)(game + CONSOLE_GLOBAL_RVA);
     *console_global = NULL;
     require(!head_watch(game, 0) && strstr(last_line, "never appeared"));
@@ -538,6 +548,14 @@ int main(void) {
     }
     get_calls -= sizeof(picks) / sizeof(picks[0]);
     puts("PASS: a read of m4_sight_pick arms the picker's M4 swallow, other names never do");
+    static const struct { LONG presses; const char *text; } selector_reads[] = {{0, "0"}, {1, "1"}, {0, "1"}, {2, "3"}};
+    for (size_t k = 0; k < sizeof(selector_reads) / sizeof(selector_reads[0]); k++) {
+        for (LONG p = 0; p < selector_reads[k].presses; p++) InterlockedIncrement(&m4_selector_presses);
+        call_get_cvar(&console_object, "sys_spec");
+        require(!strcmp(selector_seen, selector_reads[k].text));
+    }
+    get_calls -= sizeof(selector_reads) / sizeof(selector_reads[0]);
+    puts("PASS: m4_fire_key carries the selector key's press count to the mod's Lua on the main thread's console reads");
 
     require(health_bridge(m4_hit_record, head, BUFFS, 18.0f, 242.0f, SMASH) == 18.0f);
     require(set_calls == 1 && !strcmp(cvar_text, "1 12.250 -3.500 100.125"));

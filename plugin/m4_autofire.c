@@ -17,6 +17,7 @@
 #define MAG_PREFIX "M4CARBINE auto mag "
 #define LOOK_PREFIX "M4CARBINE auto look "
 #define RECOIL_PREFIX "M4CARBINE auto recoil "
+#define SINGLE_PREFIX "M4CARBINE auto single "
 
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION_FLAG 0x00000002
 
@@ -29,6 +30,7 @@ static volatile LONG RECOIL_FALL_MS = 200;
 static volatile LONG RECOIL_SPREAD = 2;
 static volatile LONG RECOIL_FOLLOW_PERCENT = 20;
 static volatile LONG SHOT_VOLUME_PERCENT = 50;
+static volatile LONG SELECTOR_KEY = 'H';
 
 static volatile LONG physical_down = 0;
 static volatile LONG physical_aim = 0;
@@ -39,9 +41,12 @@ static volatile LONG aim = AIM_NONE;
 static volatile LONG recharge = -1;
 static volatile LONG mag_left = -1;
 static volatile LONG recoil_on = 1;
+static volatile LONG single_shot = 0;
+extern volatile LONG m4_selector_presses;
 volatile LONG m4_look_off;
 static volatile LONG clicks = 0;
 static volatile double aim_pressed_at = 0;
+static volatile double click_at = 0;
 static volatile double aim_since = 0;
 static volatile LONG64 shot_tick;
 extern volatile LONG64 charged_tick;
@@ -58,6 +63,7 @@ DWORD WINAPI impact_hook(LPVOID unused);
 DWORD WINAPI mass_hook(LPVOID unused);
 DWORD WINAPI hip_hook(LPVOID unused);
 int m4_hip_free(void);
+int m4_selector_busy(void);
 DWORD WINAPI pitch_hook(LPVOID unused);
 DWORD WINAPI space_hook(LPVOID unused);
 DWORD WINAPI events_hook(LPVOID unused);
@@ -76,6 +82,7 @@ extern volatile LONG m4_armour_near, m4_armour_far, m4_armour_floor;
 extern volatile LONG m4_hip_right, m4_hip_ahead, m4_hip_up, m4_aim_depth;
 extern volatile LONG m4_pin_body;
 extern volatile LONG m4_hit_gain;
+extern volatile LONG m4_selector_volume;
 extern volatile LONG m4_sway_move, m4_sway_tilt, m4_sway_lean, m4_sway_look, m4_sway_aim, m4_sway_hz;
 void m4_tag_frame(void);
 static FILE *trace;
@@ -179,10 +186,34 @@ static LRESULT CALLBACK track_physical_button(int code, WPARAM message, LPARAM d
         }
         if (!(event->flags & LLMHF_INJECTED) && (message == WM_LBUTTONDOWN || message == WM_LBUTTONUP)) {
             InterlockedExchange(&physical_down, message == WM_LBUTTONDOWN);
-            if (message == WM_LBUTTONDOWN) InterlockedIncrement(&clicks);
+            if (message == WM_LBUTTONDOWN && !m4_selector_busy()) {
+                click_at = milliseconds();
+                InterlockedIncrement(&clicks);
+            }
             SetEvent(engage);
             if (armed) return 1;
         }
+    }
+    return CallNextHookEx(NULL, code, message, data);
+}
+
+static int game_in_front(void) {
+    DWORD process = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &process);
+    return process == GetCurrentProcessId();
+}
+
+static LRESULT CALLBACK track_selector_key(int code, WPARAM message, LPARAM data) {
+    static int held;
+    KBDLLHOOKSTRUCT *event = (KBDLLHOOKSTRUCT *)data;
+    if (code == HC_ACTION && !(event->flags & LLKHF_INJECTED) && (LONG)event->vkCode == SELECTOR_KEY) {
+        int down = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
+        if (down && !held && armed && game_in_front()) {
+            char line[64];
+            snprintf(line, sizeof(line), "selector: key pressed, press %ld", (long)InterlockedIncrement(&m4_selector_presses));
+            note(line);
+        }
+        held = down;
     }
     return CallNextHookEx(NULL, code, message, data);
 }
@@ -194,6 +225,8 @@ static DWORD WINAPI hook_thread(LPVOID unused) {
         return 1;
     }
     note("mouse hook installed");
+    note(SetWindowsHookExA(WH_KEYBOARD_LL, track_selector_key, GetModuleHandleA(NULL), 0) ? "fire selector key hook installed"
+                                                                                       : "fire selector key hook failed");
     MSG message;
     while (GetMessageA(&message, NULL, 0, 0) > 0) {
         TranslateMessage(&message);
@@ -248,6 +281,11 @@ static void apply_newest_flags(const char *text) {
     next = newest_flag(text, RECOIL_PREFIX);
     if (next >= 0 && next <= 1 && InterlockedExchange(&recoil_on, next) != next)
         note(next ? "recoil on" : "recoil off");
+    next = newest_flag(text, SINGLE_PREFIX);
+    if (next >= 0 && next <= 1 && InterlockedExchange(&single_shot, next) != next) {
+        note(next ? "single shot: one round per trigger press" : "full auto: a held trigger repeats");
+        SetEvent(engage);
+    }
     next = newest_flag(text, RECHARGE_PREFIX);
     if (next >= 0) {
         LONG seen = InterlockedExchange(&recharge, next);
@@ -266,6 +304,7 @@ static void apply_setting(const char *name, long value) {
         {"near", &m4_armour_near}, {"far", &m4_armour_far}, {"floor", &m4_armour_floor},
         {"hipright", &m4_hip_right}, {"hipahead", &m4_hip_ahead}, {"hipup", &m4_hip_up}, {"aimdepth", &m4_aim_depth},
         {"hitgain", &m4_hit_gain}, {"pinbody", &m4_pin_body}, {"swaymove", &m4_sway_move}, {"swaytilt", &m4_sway_tilt}, {"swaylean", &m4_sway_lean}, {"swaylook", &m4_sway_look}, {"swayaim", &m4_sway_aim}, {"swayhz", &m4_sway_hz},
+        {"selector", &SELECTOR_KEY}, {"selectorvol", &m4_selector_volume},
     };
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); ++i)
         if (strcmp(name, table[i].name) == 0) InterlockedExchange(table[i].slot, value);
@@ -289,11 +328,11 @@ static DWORD WINAPI follow_settings(LPVOID unused) {
                 while (fgets(line, sizeof(line), settings))
                     if (sscanf(line, "%63[a-z]=%ld", name, &value) == 2) apply_setting(name, value);
                 fclose(settings);
-                snprintf(line, sizeof(line), "settings period %ld gap %ld kick %ld recover %ld rise %ld fall %ld spread %ld follow %ld volume %ld precision %ld lift %ld push %ld ease %ld rate %ld damage %ld attack %ld near %ld far %ld floor %ld",
+                snprintf(line, sizeof(line), "settings period %ld gap %ld kick %ld recover %ld rise %ld fall %ld spread %ld follow %ld volume %ld precision %ld lift %ld push %ld ease %ld rate %ld damage %ld attack %ld near %ld far %ld floor %ld selector %ld",
                          (long)REPEAT_PERIOD_MS, (long)RELEASE_GAP_MS, (long)RECOIL_KICK,
                          (long)RECOIL_RECOVER_PERCENT, (long)RECOIL_RISE_MS, (long)RECOIL_FALL_MS, (long)RECOIL_SPREAD, (long)RECOIL_FOLLOW_PERCENT,
                          (long)SHOT_VOLUME_PERCENT, (long)m4_precision, (long)m4_saddle_lift, (long)m4_saddle_push, (long)m4_saddle_ease, (long)m4_saddle_rate,
-                         (long)m4_damage_fixed, (long)m4_attack_hundredths, (long)m4_armour_near, (long)m4_armour_far, (long)m4_armour_floor);
+                         (long)m4_damage_fixed, (long)m4_attack_hundredths, (long)m4_armour_near, (long)m4_armour_far, (long)m4_armour_floor, (long)SELECTOR_KEY);
                 note(line);
             }
         }
@@ -541,7 +580,7 @@ static DWORD WINAPI repeat_presses(LPVOID unused) {
             observed = shot_at;
         }
         int was_active = state.active;
-        int physical = physical_down, enabled = armed;
+        int physical = physical_down && !m4_selector_busy(), enabled = armed;
         double ticked = (double)InterlockedCompareExchange64(&frame_tick, 0, 0) * 1000 / frequency.QuadPart;
         double aim_stamp = aim_pressed_at;
         int effective_aim = aim != AIM_READY && aim_stamp != 0 && now - aim_stamp <= CLICK_LATCH_MS ? AIM_RAISING : aim;
@@ -549,12 +588,12 @@ static DWORD WINAPI repeat_presses(LPVOID unused) {
         int hip_allowed = enabled && aim == AIM_NONE && m4_hip_free(), hip_free = hip_allowed && !physical_aim;
         if (hip_free || hip.down) effective_aim = AIM_READY;
         double charged_at = (double)InterlockedCompareExchange64(&charged_tick, 0, 0) * 1000 / frequency.QuadPart;
-        CadenceInput input = {.now = now, .shot_at = shot_at, .frame_ms = now - ticked < 200 ? frame_time : 0, .charged_at = charged_at,
+        CadenceInput input = {.now = now, .shot_at = shot_at, .frame_ms = now - ticked < 200 ? frame_time : 0, .charged_at = charged_at, .click_at = click_at,
                               .frame = frames, .shot_frame = shot_frame, .clicks = clicks,
-                              .physical = physical, .enabled = enabled, .aim = effective_aim,
+                              .physical = physical, .enabled = enabled, .aim = effective_aim, .single = single_shot,
                               .game_down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0};
         int action = cadence_step(&state, &input, REPEAT_PERIOD_MS, RELEASE_GAP_MS);
-        m4_clock_trigger(state.active && enabled);
+        m4_clock_trigger(state.active && enabled && !state.spent);
         if (action != CADENCE_NONE) {
             send_button(action == CADENCE_UP ? MOUSEEVENTF_LEFTUP : MOUSEEVENTF_LEFTDOWN);
             if (action == CADENCE_DOWN && enabled && press_count < (int)(sizeof(press_at) / sizeof(press_at[0]))) {

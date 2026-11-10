@@ -13,6 +13,7 @@ unsigned char *m4_item_record(void *item);
 long m4_period_ms(void);
 double m4_since_shot_ms(void);
 int m4_mag_empty(void);
+int m4_selector_busy(void);
 
 #define FIRE_CAN_CALL_RVA 0x2aa2c28
 static const unsigned char FIRE_CAN_CALL_BYTES[] = {0xe8, 0x47, 0xe1, 0xfa, 0xfd, 0x84, 0xc0};
@@ -66,6 +67,10 @@ static unsigned char can_fire(unsigned char *expansion, unsigned char flag) {
     if (!state) return result;
     if (m4_mag_empty()) {
         note("fire: mag empty, press refused");
+        return 0;
+    }
+    if (m4_selector_busy()) {
+        note("fire: the fire selector is switching, press refused");
         return 0;
     }
     if (!result && charge_missed(state)) {

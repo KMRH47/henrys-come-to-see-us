@@ -260,6 +260,7 @@ void *m4_attack_resume;
 void *m4_buff_original;
 static unsigned char *damage_game;
 void m4_qam_console(void *console);
+void m4_selector_console(void *console, const char *name);
 void m4_tap_escape(void);
 extern volatile LONG m4_sight_dot;
 void m4_tag_light(int on);
@@ -474,6 +475,7 @@ void *m4_console_get(void *console, const char *name) {
     if (GetCurrentThreadId() == m4_main_thread) {
         if (lua_cvars_open != LUA_CVARS_ALL) lua_cvars_unlock(console);
         m4_qam_console(console);
+        m4_selector_console(console, name);
         if (!head_cvar) head_register(console);
         if (head_cvar && head_waiting) head_flush();
         if (name && !strcmp(name, ESCAPE_CVAR)) m4_tap_escape();

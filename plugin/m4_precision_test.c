@@ -16,6 +16,15 @@ static double since_shot = 1e12, fake_now;
 static int stance, aimed = 1;
 static double view_norm = 1;
 double m4_since_shot_ms(void) { return since_shot; }
+static double hip_share;
+double m4_selector_hip(void) { return hip_share; }
+double m4_selector_swing(double *turn, double *step) {
+    for (int i = 0; i < 3; i++) turn[i] = step[i] = 0;
+    return hip_share;
+}
+#define SWITCH_TEST_TURN 20.0
+static double switch_carry_share;
+double m4_selector_carry(void) { return switch_carry_share; }
 int m4_stance(void) { return stance; }
 int m4_aim_held(void) { return aimed; }
 static double fake_clock(void) { return fake_now; }
@@ -120,12 +129,12 @@ static const float JOINT_TURNS[JOINTS][4] = {
 static const float JOINT_PLACES[JOINTS][3] = {{0, 0, 0}, {0.12f, -0.03f, 0.07f}, {-0.31f, 0.02f, 0.18f}};
 static float quats[JOINTS][8];
 static unsigned char context[0x40], skinning[0x80], skeleton[0x10];
-static void *skeleton_slots[SKELETON_NAME_SLOT + 1], *character_slots[CHARACTER_PATH_SLOT + 1];
+static void *skeleton_slots[SKELETON_BIND_SLOT + 1], *character_slots[CHARACTER_PATH_SLOT + 1];
 
 typedef struct {
     const char *name;
     int parent;
-    float share;
+    float share, place[3];
 } joint_spec;
 
 static const joint_spec PIN_JOINTS[JOINTS] = {{"Hips", -1, 0}, {"Spine4", 0, 1}, {"RightHand", 1, 1}};
@@ -133,6 +142,16 @@ static const joint_spec FULL_BODY[] = {
     {"Human_Male", -1, 0}, {"Hips", 0, 0}, {"LeftUpLeg", 1, 0}, {"LeftFoot", 2, 0}, {"Spine", 1, 0.15f}, {"Spine1", 4, 0.35f}, {"Spine2", 5, 0.6f},
     {"Spine3", 6, 0.85f}, {"Spine4", 7, 1}, {"RightShoulder", 8, 1}, {"RightArm", 9, 1}, {"RightHand", 10, 1}, {"RightHandSlot", 11, 1},
     {"Neck", 8, 0.5f}, {"Neck1", 13, 0.25f}, {"Head", 14, 0}, {"camera", 15, 0}, {"Look", 15, 0},
+};
+static const joint_spec ARMED_BODY[] = {
+    {"Hips", -1, 0, {0, 0, 1}}, {"Spine4", 0, 1, {0, 0, 1.4f}},
+    {"LeftShoulder", 1, 1, {-0.05f, 0, 1.45f}}, {"LeftArm", 2, 1, {-0.2f, 0, 1.4f}}, {"LeftForeArm", 3, 1, {-0.25f, 0.1f, 1.15f}}, {"LeftHand", 4, 1, {-0.1f, 0.35f, 1.1f}},
+    {"RightShoulder", 1, 1, {0.05f, 0, 1.45f}}, {"RightArm", 6, 1, {0.2f, 0, 1.4f}}, {"RightForeArm", 7, 1, {0.25f, 0.1f, 1.15f}}, {"RightHand", 8, 1, {0.1f, 0.35f, 1.1f}},
+};
+static const joint_spec LONG_FOREARM[] = {
+    {"Hips", -1, 0, {0, 0, 1}}, {"Spine4", 0, 1, {0, 0, 1.4f}},
+    {"LeftShoulder", 1, 1, {-0.05f, 0, 1.45f}}, {"LeftArm", 2, 1, {-0.2f, 0, 1.4f}}, {"LeftForeArm", 3, 1, {-0.25f, 0.1f, 1.15f}}, {"LeftHand", 4, 1, {-0.1f, 2.35f, 1.1f}},
+    {"RightShoulder", 1, 1, {0.05f, 0, 1.45f}}, {"RightArm", 6, 1, {0.2f, 0, 1.4f}}, {"RightForeArm", 7, 1, {0.25f, 0.1f, 1.15f}}, {"RightHand", 8, 1, {0.1f, 0.35f, 1.1f}},
 };
 static const joint_spec NO_SPINE4[] = {{"Hips", -1, 0}, {"Spine", 0, 0}, {"RightHand", 1, 0}};
 static const joint_spec HAND_OFF_THE_SPINE[] = {{"Hips", -1, 0}, {"Spine4", 0, 0}, {"RightHand", 0, 0}};
@@ -145,6 +164,12 @@ static int fake_parent(void *self, int id) {
 
 static const char *fake_name(void *self, int id) {
     return (*(const joint_spec **)((unsigned char *)self + 8))[id].name;
+}
+
+static const float *fake_bind(void *self, int id) {
+    static float bind[BIND_PLACE + 3] = {0, 0, 0, 1};
+    memcpy(bind + BIND_PLACE, (*(const joint_spec **)((unsigned char *)self + 8))[id].place, 3 * sizeof(float));
+    return bind;
 }
 
 static const char *fake_path(void *self) {
@@ -585,8 +610,10 @@ int main(void) {
     skeleton_slots[SKELETON_JOINT_COUNT_SLOT] = game + 0xfd0000;
     skeleton_slots[SKELETON_PARENT_SLOT] = (void *)fake_parent;
     skeleton_slots[SKELETON_NAME_SLOT] = (void *)fake_name;
+    skeleton_slots[SKELETON_BIND_SLOT] = (void *)fake_bind;
     pin_parent_fn = (void *)fake_parent;
     pin_name_fn = (void *)fake_name;
+    pin_bind_fn = (void *)fake_bind;
     *(void ***)skeleton = skeleton_slots;
     *(const joint_spec **)(skeleton + 8) = PIN_JOINTS;
     character_slots[CHARACTER_PATH_SLOT] = (void *)fake_path;
@@ -871,13 +898,15 @@ int main(void) {
         const char *name;
         const joint_spec *joints;
         UINT32 count;
-        int ok;
+        int ok, arms;
     } level_cases[] = {
-        {"a full skeleton twists from the hips to the chest and keeps the head", FULL_BODY, sizeof(FULL_BODY) / sizeof(FULL_BODY[0]), 1},
-        {"a skeleton with no chest joint is refused", NO_SPINE4, 3, 0},
-        {"a hand that does not hang off the chest is refused", HAND_OFF_THE_SPINE, 3, 0},
-        {"a parent listed after its child is refused", PARENT_AFTER_CHILD, 3, 0},
-        {"a joint with no name is refused", NO_NAME, 4, 0},
+        {"a full skeleton twists from the hips to the chest and keeps the head", FULL_BODY, sizeof(FULL_BODY) / sizeof(FULL_BODY[0]), 1, 0},
+        {"a skeleton with both arms gets them solved from the chest", ARMED_BODY, sizeof(ARMED_BODY) / sizeof(ARMED_BODY[0]), 1, 1},
+        {"a forearm 2 m long leaves the arms to the shares", LONG_FOREARM, sizeof(LONG_FOREARM) / sizeof(LONG_FOREARM[0]), 1, 0},
+        {"a skeleton with no chest joint is refused", NO_SPINE4, 3, 0, 0},
+        {"a hand that does not hang off the chest is refused", HAND_OFF_THE_SPINE, 3, 0, 0},
+        {"a parent listed after its child is refused", PARENT_AFTER_CHILD, 3, 0, 0},
+        {"a joint with no name is refused", NO_NAME, 4, 0, 0},
     };
     for (size_t c = 0; c < sizeof(level_cases) / sizeof(level_cases[0]); c++) {
         static unsigned char fake[0x10];
@@ -885,10 +914,12 @@ int main(void) {
         pin_ready = 1;
         *(void ***)fake = skeleton_slots;
         *(const joint_spec **)(fake + 8) = level_cases[c].joints;
-        const unsigned char *levels = pin_levels(fake, level_cases[c].count);
-        require(!levels == !level_cases[c].ok && pin_ready == level_cases[c].ok);
-        for (UINT32 j = 0; levels && j < level_cases[c].count; j++) require(LEVEL_SHARES[levels[j]] == level_cases[c].joints[j].share);
-        require(pin_levels(fake, level_cases[c].count) == levels);
+        const pin_table *table = pin_table_of(fake, level_cases[c].count);
+        require(!table == !level_cases[c].ok && pin_ready == level_cases[c].ok);
+        for (UINT32 j = 0; table && j < level_cases[c].count; j++) require(LEVEL_SHARES[table->level[j]] == level_cases[c].joints[j].share);
+        require(!table || table->arms == level_cases[c].arms);
+        require(!level_cases[c].arms || (table->arm_root[0] == 7 && table->arm_root[1] == 7 && table->arm_joint[1][2] == 9));
+        require(pin_table_of(fake, level_cases[c].count) == table);
         printf("ok   levels %s\n", level_cases[c].name);
     }
 
@@ -923,7 +954,121 @@ int main(void) {
         printf("ok   level dual %s\n", dual_cases[c].name);
     }
 
-    enum { PIN_HOLDS, PIN_ON_RAY, PIN_KICK, PIN_NOT_THE_GUN, PIN_OFF, PIN_LETS_GO, PIN_BACK_TO_SIGHTS, PIN_FIRST_FRAME };
+    enum { ARM_JOINED, ARM_WHOLE, ARM_SHORT, ARM_REFUSED };
+    static const struct {
+        const char *name;
+        double joints[3][3], turn[3], move[3], chest;
+        int expect;
+    } arm_cases[] = {
+        {"a hand that stays put keeps the arm", {{0.2, 0, 1.4}, {0.25, 0.1, 1.15}, {0.1, 0.35, 1.1}}, {0, 0, 0}, {0, 0, 0}, 0, ARM_WHOLE},
+        {"a hand lifted to the face keeps the wrist and elbow joined", {{0.2, 0, 1.4}, {0.25, 0.1, 1.15}, {0.1, 0.35, 1.1}}, {0.4, -0.2, 0.3}, {-0.1, -0.15, 0.2}, 0, ARM_JOINED},
+        {"a hand pulled in to the chest keeps the wrist and elbow joined", {{-0.2, 0, 1.4}, {-0.25, 0.1, 1.15}, {-0.1, 0.35, 1.1}}, {0, 0, 0}, {0.1, -0.2, 0.15}, 0, ARM_JOINED},
+        {"a chest that follows whole carries the arm whole", {{0.2, 0, 1.4}, {0.25, 0.1, 1.15}, {0.1, 0.35, 1.1}}, {0.4, -0.2, 0.3}, {-0.1, -0.15, 0.2}, 1, ARM_WHOLE},
+        {"a hand past the reach gets a straight arm toward it", {{0.2, 0, 1.4}, {0.25, 0.1, 1.15}, {0.1, 0.35, 1.1}}, {0, 0, 0}, {0, 0.9, 0}, 0, ARM_SHORT},
+        {"a straight arm is left to the shares", {{0.2, 0, 1.4}, {0.2, 0.25, 1.4}, {0.2, 0.5, 1.4}}, {0.4, -0.2, 0.3}, {-0.1, -0.15, 0.2}, 0, ARM_REFUSED},
+    };
+    for (size_t c = 0; c < sizeof(arm_cases) / sizeof(arm_cases[0]); c++) {
+        const double (*joints)[3] = arm_cases[c].joints, pivot[3] = {0, 0, 1.2};
+        double q[4], shoulder[3], elbow[3], elbow_too[3], wrist[3], goal[3], upper = 0, lower = 0, reached = 0, off = 0;
+        float carry[8], root[8], bent[8], arm[8], fore[8];
+        quat_of(arm_cases[c].turn, q);
+        dual_of(q, arm_cases[c].move, carry);
+        level_dual(carry, pivot, arm_cases[c].chest, root);
+        level_dual(carry, pivot, 1 - (1 - arm_cases[c].chest) * PIN_ELBOW_PULL, bent);
+        int solved = arm_solved(joints, root, bent, carry, arm, fore);
+        require(solved == (arm_cases[c].expect != ARM_REFUSED));
+        if (solved) {
+            dual_apply(root, joints[0], goal);
+            dual_apply(arm, joints[0], shoulder);
+            dual_apply(arm, joints[1], elbow);
+            dual_apply(fore, joints[1], elbow_too);
+            dual_apply(fore, joints[2], wrist);
+            for (int i = 0; i < 3; i++) require(fabs(shoulder[i] - goal[i]) < 2e-6 && fabs(elbow[i] - elbow_too[i]) < 2e-6);
+            dual_apply(carry, joints[2], goal);
+            for (int i = 0; i < 3; i++) {
+                upper += pow(joints[1][i] - joints[0][i], 2);
+                lower += pow(joints[2][i] - joints[1][i], 2);
+                reached += pow(wrist[i] - shoulder[i], 2);
+                off += pow(wrist[i] - goal[i], 2);
+            }
+            require(arm[3] >= 0 && fore[3] >= 0);
+            if (arm_cases[c].expect == ARM_SHORT) require(fabs(sqrt(reached) - sqrt(upper) - sqrt(lower) + ARM_REACH_MARGIN_M) < 2e-6 && sqrt(off) > 0.3);
+            else require(sqrt(off) < 2e-6);
+            for (int k = 0; arm_cases[c].expect == ARM_WHOLE && k < 3; k++) {
+                double whole[3], part[3];
+                dual_apply(carry, joints[k], whole);
+                dual_apply(k < 2 ? arm : fore, joints[k], part);
+                for (int i = 0; i < 3; i++) require(fabs(whole[i] - part[i]) < 2e-6);
+            }
+        }
+        printf("ok   arm %s\n", arm_cases[c].name);
+    }
+
+    static const struct {
+        const char *name;
+        double hand_turn[3], hand_move[3], gun_turn[3], gun_move[3], hold;
+    } hold_cases[] = {
+        {"a hand that slid on the rifle goes back to its place", {0.1, -0.3, 0.2}, {0.03, -0.05, 0.02}, {0, 0, 0}, {0, 0, 0}, 1},
+        {"a rifle that turned takes the hand along", {0, 0, 0}, {0, 0, 0}, {0.3, 0.1, -0.2}, {0.02, 0.04, -0.01}, 1},
+        {"a hand half held goes half of the way", {0.1, -0.3, 0.2}, {0.03, -0.05, 0.02}, {0.3, 0.1, -0.2}, {0.02, 0.04, -0.01}, 0.5},
+        {"a hand let go is carried as it lies", {0.1, -0.3, 0.2}, {0.03, -0.05, 0.02}, {0.3, 0.1, -0.2}, {0.02, 0.04, -0.01}, 0},
+    };
+    for (size_t c = 0; c < sizeof(hold_cases) / sizeof(hold_cases[0]); c++) {
+        static const double JOINTS_HELD[3][3] = {{-0.2, 0, 1.4}, {-0.25, 0.1, 1.15}, {-0.1, 0.35, 1.1}};
+        static const double START_TURN[3] = {0.2, 0.5, -0.1}, START_MOVE[3] = {0.1, 0.2, 1.0}, GUN_TURN[3] = {-0.3, 0.2, 0.6}, GUN_MOVE[3] = {0.15, 0.3, 1.2};
+        static const double CARRY_TURN[3] = {0.4, -0.2, 0.3}, CARRY_MOVE[3] = {-0.1, -0.15, 0.2}, PIVOT[3] = {0, 0, 1.2};
+        pin_table table = {.arms = 1};
+        arm_pose start = {0}, moved = {0};
+        double q[4], slid_at[3], gone_at[3], want[3], got[3], kept[3];
+        float carry[8], gun[8], gun_moved[8], hand_moved[8], parts[PIN_LEVELS][8];
+        memcpy(start.at[0], JOINTS_HELD, sizeof(JOINTS_HELD));
+        memcpy(start.at[1], JOINTS_HELD, sizeof(JOINTS_HELD));
+        memcpy(table.arm_bind[0], JOINTS_HELD, sizeof(JOINTS_HELD));
+        memcpy(table.arm_bind[1], JOINTS_HELD, sizeof(JOINTS_HELD));
+        quat_of(START_TURN, q);
+        dual_of(q, START_MOVE, start.left_hand);
+        quat_of(GUN_TURN, q);
+        dual_of(q, GUN_MOVE, gun);
+        quat_of(CARRY_TURN, q);
+        dual_of(q, CARRY_MOVE, carry);
+        quat_of(hold_cases[c].hand_turn, q);
+        dual_of(q, hold_cases[c].hand_move, hand_moved);
+        quat_of(hold_cases[c].gun_turn, q);
+        dual_of(q, hold_cases[c].gun_move, gun_moved);
+        hip_share = 0;
+        hand_hold(gun, 1, &start);
+        require(!hand_holding && start.hold == 0);
+        hip_share = 1;
+        hand_hold(gun, 1, &start);
+        moved = start;
+        moved.hold = 0;
+        dual_apply(hand_moved, start.at[0][2], slid_at);
+        dual_apply(gun_moved, start.at[0][2], gone_at);
+        memcpy(moved.at[0][2], slid_at, sizeof(slid_at));
+        memcpy(moved.left_hand, start.left_hand, sizeof(start.left_hand));
+        dual_times(hand_moved, moved.left_hand);
+        dual_times(gun_moved, gun);
+        hip_share = hold_cases[c].hold;
+        hand_hold(gun, 1, &moved);
+        require(fabs(moved.hold - hold_cases[c].hold) < 1e-6);
+        float chest = pin_chest;
+        pin_chest = 0;
+        level_parts(carry, PIVOT, gun, &table, &moved, parts);
+        pin_chest = chest;
+        for (int i = 0; i < 3; i++) kept[i] = slid_at[i] + hold_cases[c].hold * (gone_at[i] - slid_at[i]);
+        dual_apply(carry, kept, want);
+        dual_apply(parts[PIN_LEVEL_LEFT_HAND], slid_at, got);
+        for (int i = 0; i < 3; i++) require(fabs(got[i] - want[i]) < 2e-5);
+        dual_apply(carry, slid_at, want);
+        dual_apply(parts[PIN_LEVEL_HAND], slid_at, got);
+        for (int i = 0; i < 3; i++) require(fabs(got[i] - want[i]) < 2e-5);
+        hip_share = 0;
+        hand_hold(gun, 1, &moved);
+        require(!hand_holding);
+        printf("ok   hand hold %s\n", hold_cases[c].name);
+    }
+
+    enum { PIN_HOLDS, PIN_ON_RAY, PIN_KICK, PIN_NOT_THE_GUN, PIN_OFF, PIN_LETS_GO, PIN_BACK_TO_SIGHTS, PIN_FIRST_FRAME, PIN_CARRIES };
     const struct {
         const char *name;
         double pitch, yaw, roll, off, swing_deg, swing_hz, turn_deg_s, depth, scale, shot_ms;
@@ -946,6 +1091,7 @@ int main(void) {
         {"the light going out hands a far gun back to its clip", 0, 30, 10, 60, 0, 0, 0, 0.3, 1, 1e12, 1, 0, PIN_LETS_GO, "gGbB"},
         {"the light going out in an aim hands the gun back to the sights", 0, 30, 0, 0.6, 0, 0, 0, 0.31, 1, 1e12, 0, 1, PIN_BACK_TO_SIGHTS, "gGbB"},
         {"the first pinned frame moves nothing", 0, 30, 10, 60, 0, 0, 0, 0.3, 1, 1e12, 1, 0, PIN_FIRST_FRAME, "gGbB"},
+        {"an aimed selector switch shows its clip's gun turn and ends back on the ray", 5, 30, 0, 20, 0, 0, 0, 0.3, 1, 1e12, 1, 1, PIN_CARRIES, "gGbB"},
     };
     sight_clock = fake_clock;
     for (size_t c = 0; c < sizeof(pin_cases) / sizeof(pin_cases[0]); c++) {
@@ -1021,6 +1167,21 @@ int main(void) {
         } else if (expect == PIN_OFF) {
             require(!pin_frames && pin_weight == 0);
             printf("ok   pin %s\n", pin_cases[c].name);
+        } else if (expect == PIN_CARRIES) {
+            double line[3], upward[3], held, turned;
+            pin_axes(&scene, line, upward);
+            held = angle_to(line, 0, 1, 0);
+            switch_carry_share = 1;
+            sight_run(&scene, pin_cases[c].pitch, yaw, pin_cases[c].roll, pin_cases[c].off, 0, 0, 1, drawn, pin_cases[c].order);
+            for (int frame = 0; frame < 30; frame++)
+                sight_run(&scene, pin_cases[c].pitch, yaw, pin_cases[c].roll, pin_cases[c].off + SWITCH_TEST_TURN, 0, 0, 1, drawn, pin_cases[c].order);
+            pin_axes(&scene, line, upward);
+            turned = angle_to(line, 0, 1, 0);
+            switch_carry_share = 0;
+            for (int frame = 0; frame < 60; frame++) sight_run(&scene, pin_cases[c].pitch, yaw, pin_cases[c].roll, pin_cases[c].off, 0, 0, 1, drawn, pin_cases[c].order);
+            pin_axes(&scene, line, upward);
+            require(held < 0.01 && fabs(turned - SWITCH_TEST_TURN) < 0.5 && angle_to(line, 0, 1, 0) < 0.01);
+            printf("ok   pin %s (turned %.3f deg)\n", pin_cases[c].name, turned);
         } else if (expect == PIN_FIRST_FRAME) {
             for (int j = 0; j < JOINTS; j++)
                 for (int k = 0; k < 4; k++) require(fabs(scene.gun_quats[j][k] - JOINT_TURNS[j][k]) < 2e-6);
@@ -1056,7 +1217,7 @@ int main(void) {
             {"a carry inside the allowance keeps the chest rigid with the gun", 83, -39, 5000, 1, 1},
             {"a long carry holds the chest back and the hand stays on it", 900, -39, 190, 0, 1},
             {"a long lift holds the chest back and the hand stays on it", 83, 900, 190, 0, 1},
-            {"the default carries no chest on foot and the hand stays on the gun", 83, -39, 0, 0, 1},
+            {"no allowance carries no chest on foot and the hand stays on the gun", 83, -39, 0, 0, 1},
             {"a short carry in the saddle leaves the chest with the horse and the hand on the gun", 83, -39, 190, 0, 2},
         };
         for (size_t c = 0; c < sizeof(body_cases) / sizeof(body_cases[0]); c++) {

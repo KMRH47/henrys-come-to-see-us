@@ -31,6 +31,9 @@ static const unsigned RELOAD_TRIGGERS[] = {
 };
 
 // The mod's reload marks (c_f_m4a1_reload_* and c_f_m4a1_drop_<surface>) and the WAV each plays.
+#define SELECTOR_CLICK_TRIGGER 0xa8b81825u
+volatile LONG m4_selector_volume = 100;
+
 static const struct { unsigned trigger; const char *wav; long volume; } ONE_SHOTS[] = {
     {0x3d29001bu, "out", 100},
     {0x22c0d25du, "in-1", 100},
@@ -45,7 +48,8 @@ static const struct { unsigned trigger; const char *wav; long volume; } ONE_SHOT
     {0x99cf61a5u, "drop-glass", 100},
     {0xa3f5b544u, "drop-cloth", 100},
     {0x7a37ca20u, "drop-water", 100},
-    {0x36a5d06eu, "light", 100}
+    {0x36a5d06eu, "light", 100},
+    {SELECTOR_CLICK_TRIGGER, "selector", 100}
 };
 
 static const unsigned char EXECUTE_TRIGGER_BYTES[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x56, 0x57,
@@ -68,7 +72,7 @@ static unsigned on_trigger(void *proxy, unsigned trigger) {
     }
     for (size_t i = 0; i < sizeof(ONE_SHOTS) / sizeof(ONE_SHOTS[0]); i++)
         if (trigger == ONE_SHOTS[i].trigger) {
-            m4_clock_one_shot(ONE_SHOTS[i].wav, ONE_SHOTS[i].volume);
+            m4_clock_one_shot(ONE_SHOTS[i].wav, trigger == SELECTOR_CLICK_TRIGGER ? m4_selector_volume : ONE_SHOTS[i].volume);
             return trigger;
         }
     if (trigger == SHOT_TRIGGER && proxy && proxy == m4_proxy) {

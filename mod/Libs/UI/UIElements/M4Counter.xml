@@ -9,6 +9,9 @@
       <function name="SetText" funcname="fc_setText">
         <param name="Text" desc="rounds in the magazine / rounds left" type="string" />
       </function>
+      <function name="SetMode" funcname="fc_setMode">
+        <param name="Glyph" desc="the fire mode dial's letter: A for full auto, 1 for single shot" type="string" />
+      </function>
       <function name="SetSlide" funcname="fc_setSlide">
         <param name="Offset" desc="pixels to shift the counter from the slot it was built over" type="float" />
       </function>
