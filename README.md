@@ -1,7 +1,7 @@
 <p align="center"><img src="docs/page/banner-690da305e755.png" width="850" alt="Henry&#x27;s Come to See Us!, an M4A1 for Kingdom Come: Deliverance II."><br>
-<img src="docs/page/notice-cfa84db49b44.png" width="850" alt="Version 8, The Weapon Light: F raises the gun. The beam stays where you look."><br>
+<img src="docs/page/notice-6982b74ba71f.png" width="850" alt="Version 9, The Fire Selector: Press H. Henry’s thumb turns the lever."><br>
 <img src="docs/page/panels-07350486ed47.png" width="850" alt="How to install and remove the mod, what it is compatible with, and the M4A1, 5.56 magazine, red dot sight and iron sights in the game."><br>
-<img src="docs/page/features-8fa4c4b524b3.png" width="850" alt="What the M4 does in the game."><br>
+<img src="docs/page/features-75ca7ee3d592.png" width="850" alt="What the M4 does in the game."><br>
 <img src="docs/page/gallery-649b5aef9587.png" width="850" alt="Pictures from the game."><br>
 <img src="docs/page/commands-77b93ad21926.png" width="850" alt="Console commands that give the M4, its ammunition and its sights, and two cheats: no recoil and the magazine size."><br>
 <img src="docs/page/forge-148a295b1ec1.png" width="850" alt="Built with kcd2-forge, the CLI and studio the mod is made with."></p>
