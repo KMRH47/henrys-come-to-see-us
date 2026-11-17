@@ -252,6 +252,7 @@ static const unsigned char HEALTH_BYTES[] = {
 
 volatile LONG m4_damage_fixed = 1;
 volatile LONG m4_attack_hundredths = M4_ATTACK_HUNDREDTHS;
+volatile LONG m4_damage_percent = 100;
 volatile LONG m4_armour_near = ARMOUR_NEAR_M;
 volatile LONG m4_armour_far = ARMOUR_FAR_M;
 volatile LONG m4_armour_floor = ARMOUR_FLOOR_PERCENT;
@@ -544,7 +545,7 @@ static void m4_publish_head(unsigned char *hit) {
 float m4_health_value(unsigned char *hit, float *lane, float loss, float dmgr, int channel, void *buffs, unsigned char *args) {
     float scaled = damage_scale(NULL, buffs, HEALTH_STAT, loss, *(void **)args, args[8]);
     if (!m4_hit(hit)) return scaled;
-    float kept = scaled > 0.0f ? loss : scaled;
+    float kept = scaled > 0.0f ? loss * m4_damage_percent / 100.0f : scaled;
     int index = channel_index(channel);
     if (index < 0 || lane[index] <= 0.0f) return kept;
     float body = lane[LANE_BODY];

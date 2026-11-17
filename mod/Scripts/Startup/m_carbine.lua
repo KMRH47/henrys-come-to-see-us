@@ -3811,7 +3811,13 @@ function M4Carbine.Give(item, amount, extra)
 	System.LogAlways("M4CARBINE " .. message)
 end
 
-M4Carbine.cheats = {recoilOff = "m4_recoil_off", magSize = "m4_mag_size"}
+M4Carbine.cheats = {recoilOff = "m4_recoil_off", magSize = "m4_mag_size", damage = "m4_damage", damageStandard = 100}
+
+function M4Carbine.DamagePercent()
+	local ok, percent = pcall(Variables.GetGlobal, M4Carbine.cheats.damage)
+	percent = ok and tonumber(percent) or 0
+	return percent >= 1 and percent or M4Carbine.cheats.damageStandard
+end
 
 function M4Carbine.CheatsLoad()
 	local cheats, mag = M4Carbine.cheats, M4Carbine.mag
@@ -3820,6 +3826,7 @@ function M4Carbine.CheatsLoad()
 	mag.size = size >= 1 and size or mag.standard
 	local okOff, off = pcall(Variables.GetGlobal, cheats.recoilOff)
 	System.LogAlways("M4CARBINE auto recoil " .. ((okOff and tonumber(off) == 1) and "0" or "1"))
+	System.LogAlways(string.format("M4CARBINE auto damage %d", M4Carbine.DamagePercent()))
 	M4Carbine.FireModeSend()
 end
 
@@ -3901,11 +3908,23 @@ function M4Carbine.MagSize(amount, extra)
 	M4Carbine.CheatSaid(string.format("M4 magazine holds %d rounds", size))
 end
 
+function M4Carbine.Damage(amount, extra)
+	local percent = tonumber(amount)
+	if not percent or percent < 1 or percent > 1000 or percent ~= math.floor(percent) or extra ~= nil then
+		System.LogAlways(string.format("Usage: m4_damage 1-1000 (now %d, standard %d)", M4Carbine.DamagePercent(), M4Carbine.cheats.damageStandard))
+		return
+	end
+	pcall(Variables.SetGlobal, M4Carbine.cheats.damage, percent)
+	M4Carbine.CheatsLoad()
+	M4Carbine.CheatSaid(string.format("M4 damage %d%%", percent))
+end
+
 function M4Carbine.RegisterCommands()
 	if type(System.AddCCommand) ~= "function" then return end
 	System.AddCCommand("m4_give", "M4Carbine.Give(%%)", "m4_give gun|gun_red_dot|red_dot|irons|ammo [quantity]: add M4s, sights or 5.56 rounds")
 	System.AddCCommand("m4_recoil", "M4Carbine.Recoil(%%)", "m4_recoil on|off: turn the M4's recoil on or off")
 	System.AddCCommand("m4_mag_size", "M4Carbine.MagSize(%%)", "m4_mag_size 1-10000: rounds one M4 magazine holds, 30 by default")
+	System.AddCCommand("m4_damage", "M4Carbine.Damage(%%)", "m4_damage 1-1000: percent of the M4's normal damage, 100 by default")
 	System.AddCCommand("m4_fire_mode", "M4Carbine.FireMode(%%)", "m4_fire_mode single|auto|toggle: the M4 fires one round per trigger press, or full auto while held")
 	System.AddCCommand("m4_sight_apply", "M4Carbine.SightApply(%%)", "m4_sight_apply dot|irons: the plugin runs this when a sight is used")
 	System.AddCCommand("m4_doll_tick", "M4Carbine.DollTimer()", "the plugin runs this while the inventory doll is shown")

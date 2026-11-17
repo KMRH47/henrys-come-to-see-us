@@ -18,6 +18,7 @@
 #define LOOK_PREFIX "M4CARBINE auto look "
 #define RECOIL_PREFIX "M4CARBINE auto recoil "
 #define SINGLE_PREFIX "M4CARBINE auto single "
+#define DAMAGE_PREFIX "M4CARBINE auto damage "
 
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION_FLAG 0x00000002
 
@@ -79,7 +80,7 @@ DWORD WINAPI damage_hook(LPVOID unused);
 DWORD WINAPI qam_hook(LPVOID unused);
 DWORD WINAPI look_hook(LPVOID unused);
 extern volatile LONG m4_precision, m4_saddle_lift, m4_saddle_push, m4_saddle_ease, m4_saddle_rate, m4_damage_fixed, m4_attack_hundredths;
-extern volatile LONG m4_armour_near, m4_armour_far, m4_armour_floor;
+extern volatile LONG m4_armour_near, m4_armour_far, m4_armour_floor, m4_damage_percent;
 extern volatile LONG m4_hip_right, m4_hip_ahead, m4_hip_up, m4_aim_depth;
 extern volatile LONG m4_pin_body;
 extern volatile LONG m4_hit_gain;
@@ -262,6 +263,12 @@ static void apply_newest_flags(const char *text) {
     if (rounds >= 0 && InterlockedExchange(&mag_left, rounds) != rounds) {
         char line[64];
         snprintf(line, sizeof(line), "mag: %ld rounds", rounds);
+        note(line);
+    }
+    long percent = newest_number(text, DAMAGE_PREFIX);
+    if (percent > 0 && InterlockedExchange(&m4_damage_percent, percent) != percent) {
+        char line[64];
+        snprintf(line, sizeof(line), "damage: M4 hits deal %ld%% damage", percent);
         note(line);
     }
     int next = newest_flag(text, ARMED_PREFIX);

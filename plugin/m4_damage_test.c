@@ -589,6 +589,26 @@ int main(void) {
     require(call_get_cvar(&console_object, HEAD_CVAR) == &fake_cvar_object && set_calls == 3);
     puts("PASS: m4_head_hit is created as \"0 0 0 0\" on the main thread's first console read and every M4 head hit sets \"<seq> x y z\", off-thread hits on the next read");
 
+    static const struct { LONG percent; float loss; const char *line; } damage_percents[] = {
+        {100, 18.0f, "health loss 126.0 of 100"}, {50, 9.0f, "health loss 63.0 of 100"},
+        {1, 0.18f, "health loss 1.3 of 100"}, {250, 45.0f, "health loss 200.0 of 100"},
+    };
+    head[LANE_BODY] = 1.0f;
+    damage_lines = 0;
+    for (size_t k = 0; k < sizeof(damage_percents) / sizeof(damage_percents[0]); k++) {
+        m4_damage_percent = damage_percents[k].percent;
+        float loss = health_bridge(m4_hit_record, head, BUFFS, 18.0f, 242.0f, SMASH);
+        int logged = strstr(last_line, damage_percents[k].line) != NULL;
+        float ball_loss = health_bridge(ball_record, head, BUFFS, 18.0f, 242.0f, SMASH);
+        if (loss < damage_percents[k].loss - 0.0001f || loss > damage_percents[k].loss + 0.0001f || !logged || ball_loss != 9.0f) {
+            fprintf(stderr, "FAIL: m4_damage %ld loss %.4f, ball %.4f, line %s\n", (long)damage_percents[k].percent, loss, ball_loss, last_line);
+            exit(1);
+        }
+    }
+    m4_damage_percent = 100;
+    head[LANE_BODY] = HEAD;
+    puts("PASS: m4_damage scales the health an M4 hit takes, the hit line shows it, and handgonne balls keep their loss");
+
     m4_damage_fixed = 1;
     damage_lines = DAMAGE_LINES;
     seen = lines;
