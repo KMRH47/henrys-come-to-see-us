@@ -24,8 +24,28 @@ static const HipCase CASES[] = {
     {"a busy gun lets go at once", 1, 100, 0, 200, 0, 0, 1, HIP_RELEASE, 0},
 };
 
+typedef struct {
+    const char *name;
+    int aim, free, up, down, wanted, aim_after, state;
+} RiseCase;
+
+static const RiseCase RISES[] = {
+    {"a lit or raised hip gun fires at once", AIM_NONE, 1, 1, 0, 1, AIM_READY, HIP_WAITING},
+    {"a dark hip gun still rising latches the click", AIM_NONE, 1, 0, 0, 1, AIM_RAISING, HIP_WAITING},
+    {"a held charge keeps firing whatever the rise says", AIM_NONE, 1, 0, 1, 1, AIM_READY, HIP_HELD},
+    {"a dark hip gun with no click waits quietly", AIM_NONE, 1, 0, 0, 0, AIM_RAISING, HIP_IDLE},
+    {"a busy gun keeps the real aim", AIM_READY, 0, 1, 0, 1, AIM_READY, HIP_IDLE},
+    {"a busy gun with no aim stays down", AIM_NONE, 0, 0, 0, 1, AIM_NONE, HIP_IDLE},
+};
+
 int main(void) {
     int failed = 0;
+    for (unsigned i = 0; i < sizeof(RISES) / sizeof(RISES[0]); i++) {
+        const RiseCase *c = &RISES[i];
+        int ok = hip_aim(c->aim, c->free, c->up, c->down) == c->aim_after && hip_state(c->free, c->down, c->wanted) == c->state;
+        printf("%s %s\n", ok ? "ok" : "FAILED", c->name);
+        failed += !ok;
+    }
     for (unsigned i = 0; i < sizeof(CASES) / sizeof(CASES[0]); i++) {
         const HipCase *c = &CASES[i];
         HipHold hold = {c->down, c->pressed_at, c->released_at};

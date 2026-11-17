@@ -7,6 +7,7 @@
 void note(const char *text);
 double m4_since_shot_ms(void);
 int m4_hip_held(void);
+int m4_hip_state(void);
 void *m4_string_cvar(void *console, const char *name, const char *start, const char *help);
 void m4_cvar_set(void *cvar, const char *text);
 
@@ -15,6 +16,7 @@ void m4_cvar_set(void *cvar, const char *text);
 #define HIP_FREE_CVAR "m4_hip_free"
 #define HIP_BUSY_CVAR "m4_hip_busy"
 #define HIP_AIR_CVAR "m4_hip_air"
+#define HIP_RISEN_CVAR "m4_hip_risen"
 #define HIP_LINE_PREFIX "m4_hip_line "
 #define HIP_FREE_FRESH_MS 200
 #define HIP_LINE_FRESH_MS 500
@@ -31,7 +33,7 @@ void *m4_launch_entry_original;
 static void *hip_cvar;
 static volatile LONG hip_registering, logged_rounds;
 static volatile double hip_free_at = -1e12, hip_line_at = -1e12;
-static volatile double hip_air_at = -1e12;
+static volatile double hip_air_at = -1e12, hip_risen_at = -1e12;
 static float line_start[3], line_way[3], round_velocity[3];
 
 static double hip_ms(void) {
@@ -49,6 +51,10 @@ int m4_hip_air(void) {
     return hip_ms() - hip_air_at < HIP_FREE_FRESH_MS;
 }
 
+int m4_hip_risen(void) {
+    return hip_ms() - hip_risen_at < HIP_FREE_FRESH_MS;
+}
+
 void m4_hip_console(void *console, const char *name) {
     if (!hip_cvar && console && !InterlockedCompareExchange(&hip_registering, 1, 0))
         hip_cvar = m4_string_cvar(console, HIP_SHOT_CVAR, "0", "M4 hip shot: the plugin holds the charge for it, set by m4_autofire");
@@ -56,8 +62,10 @@ void m4_hip_console(void *console, const char *name) {
     if (!strcmp(name, HIP_FREE_CVAR)) hip_free_at = hip_ms();
     else if (!strcmp(name, HIP_BUSY_CVAR)) hip_free_at = -1e12;
     else if (!strcmp(name, HIP_AIR_CVAR)) hip_air_at = hip_ms();
+    else if (!strcmp(name, HIP_RISEN_CVAR)) hip_risen_at = hip_ms();
     else if (!strcmp(name, HIP_SHOT_CVAR)) {
-        if (hip_cvar) m4_cvar_set(hip_cvar, m4_hip_held() ? "1" : "0");
+        static const char *const SHOWN[] = {"0", "1", "2"};
+        if (hip_cvar) m4_cvar_set(hip_cvar, SHOWN[m4_hip_state()]);
     } else if (!strncmp(name, HIP_LINE_PREFIX, sizeof(HIP_LINE_PREFIX) - 1)) {
         float v[6];
         if (sscanf(name + sizeof(HIP_LINE_PREFIX) - 1, "%f %f %f %f %f %f", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) != 6) return;

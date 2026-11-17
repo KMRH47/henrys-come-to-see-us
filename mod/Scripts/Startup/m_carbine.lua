@@ -536,7 +536,7 @@ M4Carbine.tap = {lift = "settle_medium_01_additive_hand", press = "settle_medium
 
 function M4Carbine.Reloading()
 	local model = M4Carbine.magModel
-	return model.entity ~= nil or model.endedAt ~= nil
+	return M4Carbine.mag.reloading or model.entity ~= nil or model.endedAt ~= nil
 end
 
 function M4Carbine.FingerAimed()
@@ -1384,20 +1384,26 @@ function M4Carbine.MagReload()
 	if M4Carbine.MagStock() <= mag.rounds then return end
 	local scene = mag.rounds == 0 and model.empty or model.partial
 	model.playing = M4Carbine.reloads[scene]
+	local lower = M4Carbine.overlay.state == "on" and M4Carbine.IsLowClip(M4Carbine.overlay.idleClip) and model.lowerFor or 0
+	if lower > 0 and M4Carbine.overlay.lift then M4Carbine.LiftCancel(M4Carbine.Dude()) end
 	mag.reloading, mag.token = true, mag.token + 1
 	local token = mag.token
 	M4Carbine.MagSend()
 	System.LogAlways(string.format("M4CARBINE mag reload from %d plays %s", mag.rounds, scene))
-	M4Carbine.MagModelStart()
-	M4Carbine.OverlayLower()
-	M4Carbine.At(model.playing.reloadSeconds, function()
+	local function start()
 		if mag.token ~= token or not mag.reloading then return end
-		mag.reloading = false
-		M4Carbine.MagStore(math.min(mag.size, M4Carbine.MagStock()))
-		M4Carbine.MagSend()
-		System.LogAlways(string.format("M4CARBINE mag loaded %d", mag.rounds))
-		if M4Carbine.overlay.aimHeld then System.LogAlways("M4CARBINE aim rearmed " .. tostring(KCD2ForgeViewProbe.Rearm())) end
-	end)
+		M4Carbine.MagModelStart()
+		M4Carbine.OverlayLower()
+		M4Carbine.At(model.playing.reloadSeconds, function()
+			if mag.token ~= token or not mag.reloading then return end
+			mag.reloading = false
+			M4Carbine.MagStore(math.min(mag.size, M4Carbine.MagStock()))
+			M4Carbine.MagSend()
+			System.LogAlways(string.format("M4CARBINE mag loaded %d", mag.rounds))
+			if M4Carbine.overlay.aimHeld then System.LogAlways("M4CARBINE aim rearmed " .. tostring(KCD2ForgeViewProbe.Rearm())) end
+		end)
+	end
+	if lower > 0 then M4Carbine.At(lower, start) else start() end
 end
 
 -- The magazine leaves the gun during a reload. The reload hides the held gun's
@@ -1420,8 +1426,13 @@ end
 -- ones are removed. Each of sounds plays its reload sound (the native plugin's
 -- m4_reload WAVs) at that clip second, timed so the click lands on the move:
 -- out as the magazine leaves the well, in and in2 on the two pushes that seat
--- it (the two clicks of the kept mag in). The bare gun has
--- no forward assist plunger either: m4_assist.cgf is slot 3, in the gun's own
+-- it (the two clicks of the kept mag in). A reload from the light's hold, lit
+-- or raised by a dark click, first lowers to the plain hold and starts the clip
+-- lowerFor seconds later: the clip's left arm over the lit hold's aimed body
+-- pushed the left shoulder into view (A1108, user: "left shoulder pops forward
+-- when reloading in hip flash"). A lift still raising the hold is cancelled, as
+-- it holds the hold swap. The hold comes back once the clip has faded.
+-- The bare gun has no forward assist plunger either: m4_assist.cgf is slot 3, in the gun's own
 -- coordinates too, moved along assist, the Studio's push as keys of a clip
 -- second and the plunger's offset in the slot's frame, four numbers a key.
 -- From seated seconds on the magazine rests in the well and the clip keys bone
@@ -1444,6 +1455,7 @@ M4Carbine.magModel = M4Carbine.magModel or {
 	mass = 0.12,
 	kept = 8,
 	chatHold = 8,
+	lowerFor = 0.35,
 	sounds = {{0.01, "out"}, {0.92, "in"}, {1.12, "in2"}},
 	drops = {},
 	playing = nil,
@@ -2643,7 +2655,7 @@ end
 -- In the saddle the overlay plays the mounted idle's arms (mountClip), so every
 -- gait keeps the mounted hold while the body still rides.
 function M4Carbine.IdleClip()
-	local lit = M4Carbine.light.on or M4Carbine.light.kept
+	local lit = (M4Carbine.light.on or M4Carbine.light.kept or M4Carbine.HipRaised()) and not M4Carbine.Reloading()
 	if M4Carbine.Mounted() then return lit and M4Carbine.overlay.lowClip or M4Carbine.overlay.mountClip end
 	if lit then return M4Carbine.LowClip() end
 	if M4Carbine.Crouched() then return M4Carbine.overlay.crouchClip end
@@ -2941,7 +2953,7 @@ local lightF = {x = 0, y = 0, z = 0}
 M4Carbine.lightTag = {sent = nil, at = -1, every = 1}
 function M4Carbine.LightTag()
 	local tag = M4Carbine.lightTag
-	local on = M4Carbine.inHand and M4Carbine.light.on and true or false
+	local on = M4Carbine.inHand and (M4Carbine.light.on or M4Carbine.HipRaised()) and not M4Carbine.Reloading() and true or false
 	local now = M4Carbine.Now()
 	if on == tag.sent and now - tag.at < tag.every then return end
 	tag.sent, tag.at = on, now
@@ -2950,8 +2962,44 @@ end
 
 M4Carbine.hipShot = {free = false, held = "m4_hip_shot", reach = 500, targets = 1 + 2 + 4 + 8 + 0x100}
 
+-- With the lamp dark, a click at the hip raises the gun into the light's hold:
+-- m4_hip_shot reads 2 while the click waits and 1 while the plugin holds the
+-- charge. The plugin presses only once m4_hip_risen says the gun has risen, rise
+-- seconds after the click, past the pin's 0.15 s rise, so no round leaves a
+-- moving gun (A1105: "the fire starts while the gun is moving"). The hold
+-- lowers hold seconds after the charge goes, which is HIP_TAIL_MS 0.4 s after
+-- the last round. The lamp stays dark. An aim, a reload, the light or the gun
+-- leaving the hand ends it.
+M4Carbine.hipRaise = {at = nil, from = nil, hold = 0.6, rise = 0.15}
+
+function M4Carbine.HipRaised()
+	return M4Carbine.hipRaise.at ~= nil
+end
+
+function M4Carbine.HipRaiseTick(asked)
+	local raise, now = M4Carbine.hipRaise, M4Carbine.Now()
+	if asked and not M4Carbine.light.on then
+		if not raise.at then
+			raise.from = now
+			System.LogAlways("M4HIP raised by a click")
+		end
+		raise.at = now
+	elseif raise.at and (M4Carbine.light.on or not M4Carbine.inHand or M4Carbine.overlay.aimHeld or M4Carbine.Reloading() or now - raise.at >= raise.hold) then
+		raise.at, raise.from = nil, nil
+		System.LogAlways("M4HIP lowered")
+	end
+	if M4Carbine.light.on or (raise.from and now - raise.from >= raise.rise) then System.GetCVar("m4_hip_risen") end
+end
+
+-- The pin holds the gun in first person only. A lit lamp has read the
+-- camera's distance from the head already; a dark raise reads it here.
+function M4Carbine.PinHeld()
+	if M4Carbine.light.on then return not M4Carbine.beam.far end
+	return M4Carbine.HipRaised() and not M4Carbine.ViewFarFromHead()
+end
+
 function M4Carbine.HipShotFree()
-	return M4Carbine.light.on and not M4Carbine.downed.at and M4Carbine.HipFree() and not M4Carbine.Reloading() and not M4Carbine.doll.open and (M4Carbine.mag.rounds or 0) > 0 and true or false
+	return not M4Carbine.downed.at and M4Carbine.HipFree() and not M4Carbine.Reloading() and not M4Carbine.doll.open and (M4Carbine.mag.rounds or 0) > 0 and true or false
 end
 
 function M4Carbine.HipShotLine()
@@ -2974,7 +3022,9 @@ function M4Carbine.HipShotTick()
 	if free or shot.free then System.GetCVar(free and "m4_hip_free" or "m4_hip_busy") end
 	if M4Carbine.inHand and M4Carbine.Dude().actor:IsFlying() then System.GetCVar("m4_hip_air") end
 	shot.free = free
-	if System.GetCVar(shot.held) == "1" then M4Carbine.HipShotLine() end
+	local state = System.GetCVar(shot.held)
+	if state == "1" then M4Carbine.HipShotLine() end
+	M4Carbine.HipRaiseTick(state == "1" or state == "2")
 end
 
 M4Carbine.pinTag = {sent = nil, at = -1, every = 1, fall = 0.3, boxed = nil, changedAt = -1, wide = 2, rest = 1}
@@ -3009,7 +3059,7 @@ end
 
 function M4Carbine.PinTag()
 	local tag, overlay = M4Carbine.pinTag, M4Carbine.overlay
-	local on = M4Carbine.inHand and not M4Carbine.door.gun and M4Carbine.light.on and not M4Carbine.downed.at and not M4Carbine.beam.far and not M4Carbine.Reloading() and not (M4Carbine.Mounted() and overlay.aimHeld) and not overlay.holstering
+	local on = M4Carbine.inHand and not M4Carbine.door.gun and M4Carbine.PinHeld() and not M4Carbine.downed.at and not M4Carbine.Reloading() and not (M4Carbine.Mounted() and overlay.aimHeld) and not overlay.holstering
 		and not M4Carbine.doll.open and not System.GetEntityByName('DialogTwin_Dude') and M4Carbine.Dude().actor:GetHealth() > 0 and true or false
 	local now = M4Carbine.Now()
 	if on ~= tag.sent then tag.changedAt = now end
@@ -4128,6 +4178,7 @@ function M4Carbine.OverlayReloaded(reason)
 	M4Carbine.starter.done, M4Carbine.starter.at = false, nil
 	M4Carbine.stash.done, M4Carbine.stash.at = false, nil
 	M4Carbine.headshot.seq = nil
+	M4Carbine.hipRaise.at, M4Carbine.hipRaise.from = nil, nil
 	-- A load drops the pending frame timer while the last tick is still fresh, so
 	-- the M4 sat in the vanilla hold until the next key press (A746, user: "before
 	-- moving henry the m4 has the handgonne idle pose"). A restart always runs.

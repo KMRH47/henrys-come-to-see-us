@@ -63,6 +63,7 @@ DWORD WINAPI impact_hook(LPVOID unused);
 DWORD WINAPI mass_hook(LPVOID unused);
 DWORD WINAPI hip_hook(LPVOID unused);
 int m4_hip_free(void);
+int m4_hip_risen(void);
 int m4_selector_busy(void);
 DWORD WINAPI pitch_hook(LPVOID unused);
 DWORD WINAPI space_hook(LPVOID unused);
@@ -540,6 +541,12 @@ int m4_hip_held(void) {
     return hip.down;
 }
 
+static volatile LONG hip_shown;
+
+int m4_hip_state(void) {
+    return hip_shown;
+}
+
 double m4_since_shot_ms(void) {
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
@@ -586,7 +593,8 @@ static DWORD WINAPI repeat_presses(LPVOID unused) {
         int effective_aim = aim != AIM_READY && aim_stamp != 0 && now - aim_stamp <= CLICK_LATCH_MS ? AIM_RAISING : aim;
         if (effective_aim == AIM_RAISING && shot_at > (aim_stamp ? aim_stamp : aim_since)) effective_aim = AIM_READY;
         int hip_allowed = enabled && aim == AIM_NONE && m4_hip_free(), hip_free = hip_allowed && !physical_aim;
-        if (hip_free || hip.down) effective_aim = AIM_READY;
+        int hip_risen = m4_hip_risen(), hip_ready = hip_free && hip_risen;
+        effective_aim = hip_aim(effective_aim, hip_free, hip_risen, hip.down);
         double charged_at = (double)InterlockedCompareExchange64(&charged_tick, 0, 0) * 1000 / frequency.QuadPart;
         CadenceInput input = {.now = now, .shot_at = shot_at, .frame_ms = now - ticked < 200 ? frame_time : 0, .charged_at = charged_at, .click_at = click_at,
                               .frame = frames, .shot_frame = shot_frame, .clicks = clicks,
@@ -613,7 +621,8 @@ static DWORD WINAPI repeat_presses(LPVOID unused) {
             if (physical_aim) send_button(MOUSEEVENTF_RIGHTDOWN);
             note("hip: the aim takes over the hip shot");
         }
-        int hip_action = hip_step(&hip, now, shot_at, hip.down ? hip_allowed : hip_free, physical || state.latched);
+        int hip_action = hip_step(&hip, now, shot_at, hip.down ? hip_allowed : hip_ready, physical || state.latched);
+        InterlockedExchange(&hip_shown, hip_state(hip_free, hip.down, physical || state.latched));
         if (hip_action != HIP_NONE) {
             send_button(hip_action == HIP_PRESS ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP);
             note(hip_action == HIP_PRESS ? "hip: charge held for a hip shot" : "hip: charge let go");
