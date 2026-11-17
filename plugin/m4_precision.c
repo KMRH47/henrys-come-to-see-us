@@ -16,12 +16,15 @@ void put_call(unsigned char *from, unsigned char *to, size_t length);
 #define CAMERA_BONE_ADD_RVA 0x94d999
 #define ATTACHMENT_ADD_RVA 0x423ae4
 #define SLOT_DRAWN_RVA 0x49f9c1
+#define PART_DRAWN_RVA 0x49f30e
 #define SKINNING_SIGNATURE_RVA 0x5fe29f
 #define SKINNING_CALL_RVA 0x5fe2ab
 #define SKINNING_COMPUTATION_RVA 0x5fe2f0
 #define ADD_LOOP_LENGTH 0x1c
 #define SLOT_DRAWN_LENGTH 7
+#define PART_DRAWN_LENGTH 7
 #define SKINNING_CALL_LENGTH 5
+#define SLOT_MATRIX 0x08
 #define SLOT_CHARACTER 0x80
 #define CONTEXT_SKELETON 0x08
 #define CONTEXT_INSTANCE_PLUS_8 0x10
@@ -38,6 +41,7 @@ static const unsigned char ATTACHMENT_ADD_BYTES[] = {
     0x05, 0xa3, 0x48, 0x83, 0xc0, 0x04, 0x48, 0x83, 0xf8, 0x0c, 0x7c, 0xe4
 };
 static const unsigned char SLOT_DRAWN_BYTES[] = {0x48, 0x8d, 0x45, 0xc8, 0x4d, 0x8b, 0xc7};
+static const unsigned char PART_DRAWN_BYTES[] = {0x48, 0x8b, 0x4e, 0x78, 0x4d, 0x8b, 0xc5};
 static const unsigned char SKINNING_CALL_BYTES[] = {
     0x49, 0x8d, 0x4b, 0xc8, 0x49, 0x89, 0x43, 0xd8, 0x4d, 0x89, 0x43, 0xe0, 0xe8, 0x40, 0x00, 0x00,
     0x00, 0x48, 0x8b, 0x47, 0x50
@@ -48,6 +52,7 @@ static const struct { size_t rva; const unsigned char *bytes; size_t length; } p
     {CAMERA_BONE_ADD_RVA, CAMERA_ADD_BYTES, sizeof(CAMERA_ADD_BYTES)},
     {ATTACHMENT_ADD_RVA, ATTACHMENT_ADD_BYTES, sizeof(ATTACHMENT_ADD_BYTES)},
     {SLOT_DRAWN_RVA, SLOT_DRAWN_BYTES, sizeof(SLOT_DRAWN_BYTES)},
+    {PART_DRAWN_RVA, PART_DRAWN_BYTES, sizeof(PART_DRAWN_BYTES)},
     {SKINNING_SIGNATURE_RVA, SKINNING_CALL_BYTES, sizeof(SKINNING_CALL_BYTES)},
 };
 
@@ -74,7 +79,12 @@ static const unsigned char ATTACHMENT_ARGS_RBP_69_41_5D[] = {
 static const unsigned char ATTACHMENT_LOOP_EXIT_STATE[] = {
     0xb8, 0x0c, 0x00, 0x00, 0x00, 0xf3, 0x0f, 0x10, 0x45, 0xab, 0x48, 0x83, 0xf8, 0x0c
 };
-static const unsigned char DRAWN_ARGS_MATRIX_RBP_38_SLOT_RSI_PASS_R13[] = {0x48, 0x8d, 0x4d, 0xc8, 0x48, 0x89, 0xf2, 0x4d, 0x89, 0xe8};
+static const unsigned char DRAWN_ARGS_MATRIX_RBP_38_SLOT_RSI_PASS_R13_ENTITY_RBP_108[] = {
+    0x48, 0x8d, 0x4d, 0xc8, 0x48, 0x89, 0xf2, 0x4d, 0x89, 0xe8, 0x4c, 0x8b, 0x8d, 0x08, 0x01, 0x00, 0x00
+};
+static const unsigned char PART_ARGS_SLOT_RSI_DRAW_R14_ENTITY_RBP_108_SPARE_RBP_38[] = {
+    0x48, 0x89, 0xf1, 0x4c, 0x89, 0xf2, 0x4c, 0x8b, 0x85, 0x08, 0x01, 0x00, 0x00, 0x4c, 0x8d, 0x4d, 0xc8
+};
 static const unsigned char SKINNING_ARGS_CONTEXT_RCX_DATA_RDI[] = {0x48, 0x89, 0xfa};
 
 #define PRECISION_CAMERA 1
@@ -143,6 +153,7 @@ typedef struct {
 #define SIGHT_STEADY_FRAMES 8
 #define SIGHT_SHOT_QUIET_MS 600
 #define VIEW_FRESH_S 0.1
+#define CAMERA_FRESH_S 0.25
 #define SIGHT_TRACE_AFTER_SHOT_MS 3000
 #define SIGHT_BIN_DEG 2.0
 #define SIGHT_BINS 91
@@ -277,10 +288,17 @@ typedef struct {
     float left_hand[8], held[8], hold;
 } arm_pose;
 
+typedef struct {
+    volatile LONG seq, frame, moved;
+    void *volatile entity;
+    volatile float fix[8], model[12];
+} shown_gun;
+
 static rounding cameras[CAMERA_RING], attachments[ATTACHMENT_RING];
 static skin_shift shifts[SHIFTS];
 static volatile LONG camera_head, attachment_head, camera_frame;
 static volatile float camera_at[3];
+static volatile double camera_added_at = -1e12;
 static volatile UINT32 body_at[3];
 static volatile LONG camera_adds, kept_adds, near_draws, placed_draws, body_draws, camera_hits, skins, shifted[3];
 static volatile LONG pass_camera_offset = -1, pass_scans, pass_same, pass_differ;
@@ -334,6 +352,9 @@ static LONG sight_active, sight_steady, sight_frame = -1, sight_none = -1;
 static volatile LONG sight_lock, sight_frames, sight_learned, sight_skins, sight_kind, sight_stance;
 static volatile LONG sight_off, sight_shooting, sight_turning, sight_swinging, sight_mounted, sight_followed, sight_walking, sight_flips, sight_stale;
 static volatile LONG gun_lost_skins, gun_bare_skins, gun_rescued_skins, shift_full;
+static shown_gun gun_shown;
+static volatile LONG part_draws;
+static volatile float part_peak;
 static volatile LONG follow_same, follow_late, first_gun, first_body, body_waited, body_gave_up, body_on_gun_thread, body_refixed;
 static volatile DWORD gun_thread;
 static double body_wait_peak, saddle_kick, saddle_kick_from, saddle_last_shot_ms = 1e12, saddle_reach, saddle_turned_at = -1e12;
@@ -354,6 +375,10 @@ static double clock_seconds(void) {
     return (double)now.QuadPart / (double)rate.QuadPart;
 }
 static double (*sight_clock)(void) = clock_seconds;
+
+static int camera_fresh(void) {
+    return sight_clock() - camera_added_at <= CAMERA_FRESH_S;
+}
 
 static UINT32 bits(float value) {
     UINT32 out;
@@ -394,6 +419,7 @@ static void camera_add(const float *a, const float *b, float *out) {
         body_at[i] = bits(a[i]);
     }
     keep(cameras, &camera_head, CAMERA_RING, out, a, b);
+    camera_added_at = sight_clock();
     InterlockedIncrement(&camera_adds);
     InterlockedIncrement(&camera_frame);
 }
@@ -406,7 +432,7 @@ static void attachment_add(const float *a, const float *b, float *out) {
     InterlockedIncrement(&kept_adds);
 }
 
-static int to_local(const float *m, const double *world, float *local) {
+static int to_model(const float *m, const double *world, double *model) {
     double a = m[0], b = m[1], c = m[2], d = m[4], e = m[5], f = m[6], g = m[8], h = m[9], k = m[10];
     double det = a * (e * k - f * h) - b * (d * k - f * g) + c * (d * h - e * g);
     if (det > -1e-6 && det < 1e-6) return 0;
@@ -414,7 +440,14 @@ static int to_local(const float *m, const double *world, float *local) {
                          f * g - d * k, a * k - c * g, c * d - a * f,
                          d * h - e * g, b * g - a * h, a * e - b * d};
     for (int i = 0; i < 3; i++)
-        local[i] = (float)((inverse[3 * i] * world[0] + inverse[3 * i + 1] * world[1] + inverse[3 * i + 2] * world[2]) / det);
+        model[i] = (inverse[3 * i] * world[0] + inverse[3 * i + 1] * world[1] + inverse[3 * i + 2] * world[2]) / det;
+    return 1;
+}
+
+static int to_local(const float *m, const double *world, float *local) {
+    double model[3];
+    if (!to_model(m, world, model)) return 0;
+    for (int i = 0; i < 3; i++) local[i] = (float)model[i];
     return 1;
 }
 
@@ -535,6 +568,7 @@ static void note_miss(const float *at) {
 }
 
 static void translation_of(const float *q, float *t);
+static void shift_dual_quat(float *q, const float *d);
 
 static double dot3(const double *a, const double *b) {
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -1776,15 +1810,110 @@ static int follow_of(const void *instance, LONG kind, float *out, LONG *owed, in
     return ok;
 }
 
-static void slot_drawn(const float *location, const unsigned char *slot, const unsigned char *pass) {
+static LONG open_shown_gun(void) {
+    LONG seq = gun_shown.seq & ~1;
+    while (InterlockedCompareExchange(&gun_shown.seq, seq + 1, seq) != seq) {
+        YieldProcessor();
+        seq = gun_shown.seq & ~1;
+    }
+    return seq;
+}
+
+static void show_gun(void *entity, const float *model, const float *fix) {
+    LONG seq = open_shown_gun();
+    gun_shown.entity = entity;
+    gun_shown.frame = camera_frame;
+    gun_shown.moved = 1;
+    for (int i = 0; i < 8; i++) gun_shown.fix[i] = fix[i];
+    for (int i = 0; i < 12; i++) gun_shown.model[i] = model[i];
+    InterlockedExchange(&gun_shown.seq, seq + 2);
+}
+
+static void place_shown_gun(const float *model) {
+    LONG seq = open_shown_gun();
+    for (int i = 0; i < 12; i++) gun_shown.model[i] = model[i];
+    InterlockedExchange(&gun_shown.seq, seq + 2);
+}
+
+static void rest_shown_gun(void) {
+    LONG seq = open_shown_gun();
+    gun_shown.moved = 0;
+    InterlockedExchange(&gun_shown.seq, seq + 2);
+}
+
+static void gun_fix(const float *sight, const float *shift, float *fix) {
+    memcpy(fix, sight, 8 * sizeof(float));
+    while (InterlockedCompareExchange(&sight_lock, 1, 0)) YieldProcessor();
+    LONG frame = camera_frame;
+    if (follow_frames[frame & 1] == frame) dual_times(follow_duals[frame & 1], fix);
+    InterlockedExchange(&sight_lock, 0);
+    shift_dual_quat(fix, shift);
+}
+
+static int gun_shown_now(float *fix, float *model) {
+    for (int tries = 0; tries < SHIFT_READ_TRIES; tries++) {
+        LONG seq = gun_shown.seq;
+        if (!seq) return 0;
+        if (seq & 1) {
+            YieldProcessor();
+            continue;
+        }
+        LONG age = camera_frame - gun_shown.frame;
+        if (!gun_shown.moved || age < 0 || age > SHIFT_FRAMES || !camera_fresh()) return 0;
+        for (int i = 0; i < 8; i++) fix[i] = gun_shown.fix[i];
+        for (int i = 0; i < 12; i++) model[i] = gun_shown.model[i];
+        if (gun_shown.seq == seq) return 1;
+    }
+    return 0;
+}
+
+static float part_on_gun(const float *model, const float *fix, const float *part, float *out) {
+    double q[4] = {fix[0], fix[1], fix[2], fix[3]}, gap = 0;
+    float placed[12];
+    for (int column = 0; column < 4; column++) {
+        int origin = column == 3;
+        double world[3], local[3], shown[3];
+        for (int i = 0; i < 3; i++) world[i] = (double)part[4 * i + column] - (origin ? model[4 * i + 3] : 0);
+        if (!to_model(model, world, local)) return -1;
+        if (origin) dual_apply(fix, local, shown);
+        else rotate(q, local, shown);
+        for (int i = 0; i < 3; i++) {
+            double back = model[4 * i] * shown[0] + model[4 * i + 1] * shown[1] + model[4 * i + 2] * shown[2];
+            if (origin) gap += (back - world[i]) * (back - world[i]);
+            placed[4 * i + column] = (float)(back + (origin ? model[4 * i + 3] : 0));
+        }
+    }
+    for (int i = 0; i < 12; i++)
+        if (!isfinite(placed[i])) return -1;
+    memcpy(out, placed, sizeof(placed));
+    return (float)sqrt(gap);
+}
+
+static void part_drawn(const unsigned char *slot, const float **draw, void *entity, float *spare) {
+    if (!entity || entity != gun_shown.entity) return;
+    const float *part = (const float *)(slot + SLOT_MATRIX);
+    float fix[8], model[12];
+    if (*draw != part || !gun_shown_now(fix, model)) return;
+    float moved = part_on_gun(model, fix, part, spare);
+    if (moved < 0) return;
+    *draw = spare;
+    InterlockedIncrement(&part_draws);
+    if (moved > part_peak) part_peak = moved;
+}
+
+static void slot_drawn(const float *location, const unsigned char *slot, const unsigned char *pass, void *entity) {
+    if (!camera_fresh()) return;
     float at[3] = {location[3], location[7], location[11]};
     float camera[3] = {camera_at[0], camera_at[1], camera_at[2]};
     int body = bits(at[0]) == body_at[0] && bits(at[1]) == body_at[1] && bits(at[2]) == body_at[2];
     void *character = *(void *const *)(slot + SLOT_CHARACTER);
-    if (body && character) m4_body_instance = character;
+    int shown = entity && entity == gun_shown.entity;
+    if (shown) place_shown_gun(location);
     float x = at[0] - camera[0], y = at[1] - camera[1], z = at[2] - camera[2];
     if (!body && x * x + y * y + z * z > KEEP_RADIUS_SQUARED) return;
     const float *view = check_pass_camera(pass, camera);
+    if (!view && pass_camera_offset >= 0) return;
+    if (body && character) m4_body_instance = character;
     InterlockedIncrement(body ? &body_draws : &near_draws);
     float from_camera[3] = {0, 0, 0}, from_gun[3] = {0, 0, 0};
     if (!body && !lost_from(attachments, &attachment_head, ATTACHMENT_RING, at, from_gun)) {
@@ -1803,6 +1932,13 @@ static void slot_drawn(const float *location, const unsigned char *slot, const u
     void *instance = character;
     int sighted = !body && view && (mode & PRECISION_SIGHT) && tag_armed && sight_of(location, view, at, camera, world, instance, sight);
     store_shift(instance, local, body ? SHIFT_BODY : SHIFT_GUN, sighted ? sight : NULL);
+    if (sighted) {
+        float fix[8];
+        gun_fix(sight, local, fix);
+        show_gun(entity, location, fix);
+    } else if (shown && view) {
+        rest_shown_gun();
+    }
     for (int i = 0; i < 3; i++) {
         camera_lost[i] = from_camera[i];
         if (!body) gun_lost[i] = from_gun[i];
@@ -1911,6 +2047,7 @@ static int sight_rescue(const void *instance, float *sight) {
 static void skinning_computed(unsigned char *context, const unsigned char *skinning) {
     skinning_computation(context);
     InterlockedIncrement(&skins);
+    if (!camera_fresh()) return;
     float d[3], sight[8];
     LONG kind, sighted, age;
     void *instance = *(unsigned char **)(context + CONTEXT_INSTANCE_PLUS_8) - 8;
@@ -2013,9 +2150,12 @@ static int precision_install(unsigned char *game) {
     unsigned char *drawn = stub(attachment, NULL, 0, ATTACHMENT_ARGS_RBP_69_41_5D, sizeof(ATTACHMENT_ARGS_RBP_69_41_5D),
                                  (void *)attachment_add, ATTACHMENT_LOOP_EXIT_STATE, sizeof(ATTACHMENT_LOOP_EXIT_STATE),
                                  game + ATTACHMENT_ADD_RVA + ADD_LOOP_LENGTH);
-    unsigned char *skinned = stub(drawn, SLOT_DRAWN_BYTES, SLOT_DRAWN_LENGTH,
-                                  DRAWN_ARGS_MATRIX_RBP_38_SLOT_RSI_PASS_R13, sizeof(DRAWN_ARGS_MATRIX_RBP_38_SLOT_RSI_PASS_R13),
-                                  (void *)slot_drawn, NULL, 0, game + SLOT_DRAWN_RVA + SLOT_DRAWN_LENGTH);
+    unsigned char *part = stub(drawn, SLOT_DRAWN_BYTES, SLOT_DRAWN_LENGTH, DRAWN_ARGS_MATRIX_RBP_38_SLOT_RSI_PASS_R13_ENTITY_RBP_108,
+                               sizeof(DRAWN_ARGS_MATRIX_RBP_38_SLOT_RSI_PASS_R13_ENTITY_RBP_108), (void *)slot_drawn, NULL, 0,
+                               game + SLOT_DRAWN_RVA + SLOT_DRAWN_LENGTH);
+    unsigned char *skinned = stub(part, PART_DRAWN_BYTES, PART_DRAWN_LENGTH, PART_ARGS_SLOT_RSI_DRAW_R14_ENTITY_RBP_108_SPARE_RBP_38,
+                                  sizeof(PART_ARGS_SLOT_RSI_DRAW_R14_ENTITY_RBP_108_SPARE_RBP_38), (void *)part_drawn, NULL, 0,
+                                  game + PART_DRAWN_RVA + PART_DRAWN_LENGTH);
     unsigned char *end = emit_jump(emit(skinned, SKINNING_ARGS_CONTEXT_RCX_DATA_RDI, sizeof(SKINNING_ARGS_CONTEXT_RCX_DATA_RDI)),
                                    (void *)skinning_computed);
     skinning_computation = (void (*)(unsigned char *))(game + SKINNING_COMPUTATION_RVA);
@@ -2024,8 +2164,9 @@ static int precision_install(unsigned char *game) {
     put_jump(game + CAMERA_BONE_ADD_RVA, camera_bone, ADD_LOOP_LENGTH);
     put_jump(game + ATTACHMENT_ADD_RVA, attachment, ADD_LOOP_LENGTH);
     put_jump(game + SLOT_DRAWN_RVA, drawn, SLOT_DRAWN_LENGTH);
+    put_jump(game + PART_DRAWN_RVA, part, PART_DRAWN_LENGTH);
     put_call(game + SKINNING_CALL_RVA, skinned, SKINNING_CALL_LENGTH);
-    note("precision: camera, attachment, slot draw and skinning hooks installed");
+    note("precision: camera, attachment, slot draw, part draw and skinning hooks installed");
     return 1;
 }
 
@@ -2084,6 +2225,13 @@ static void report(void) {
                  (long)rigid_skins, (long)refused, (long)arms_solved, (long)arms_loose, (long)gun_lost_n, (long)gun_bare_n, (long)gun_rescued_n, (long)stale, (long)other_vtables,
                  (long)m4_hip_right, (long)m4_hip_ahead, (long)m4_hip_up, (long)m4_aim_depth, (long)m4_sway_move, (long)m4_sway_tilt, (long)m4_sway_lean,
                  (long)m4_sway_look, (long)m4_sway_aim, (long)m4_sway_hz);
+        note(line);
+    }
+    LONG parts = InterlockedExchange(&part_draws, 0);
+    float parts_peak = part_peak;
+    part_peak = 0;
+    if (parts) {
+        snprintf(line, sizeof(line), "parts: drawn on the shown gun %ld | moved peak %.1f mm", (long)parts, parts_peak * 1000);
         note(line);
     }
     if (!frames && !mounted) return;

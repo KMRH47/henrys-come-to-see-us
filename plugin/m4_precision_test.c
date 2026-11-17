@@ -4,9 +4,10 @@
 
 #define require(condition) do { if (!(condition)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #condition); exit(1); } } while (0)
 
-static int pin_report_lines;
+static int pin_report_lines, part_report_lines;
 void note(const char *text) {
     if (!strncmp(text, "pin: frames", 11)) pin_report_lines++;
+    if (!strncmp(text, "parts: drawn", 12)) part_report_lines++;
     puts(text);
 }
 
@@ -30,15 +31,15 @@ int m4_aim_held(void) { return aimed; }
 static double fake_clock(void) { return fake_now; }
 
 static const unsigned char RUN_IN_FRAME[] = {
-    0x53, 0x55, 0x56, 0x57, 0x41, 0x55, 0x48, 0x89, 0xe3, 0x48, 0x89, 0xcc, 0x48, 0x89, 0xd5, 0x49,
-    0x8b, 0x01, 0x49, 0x8b, 0x71, 0x08, 0x49, 0x8b, 0x79, 0x10, 0x49, 0x8b, 0x49, 0x18, 0x4d, 0x8b,
-    0x41, 0x20, 0x4d, 0x8b, 0x59, 0x28, 0x4d, 0x8b, 0x69, 0x30, 0x41, 0xff, 0x51, 0x38, 0x48, 0x89,
-    0xdc, 0x41, 0x5d, 0x5f, 0x5e, 0x5d, 0x5b, 0xc3
+    0x53, 0x55, 0x56, 0x57, 0x41, 0x55, 0x41, 0x56, 0x48, 0x89, 0xe3, 0x48, 0x89, 0xcc, 0x48, 0x89,
+    0xd5, 0x49, 0x8b, 0x01, 0x49, 0x8b, 0x71, 0x08, 0x49, 0x8b, 0x79, 0x10, 0x49, 0x8b, 0x49, 0x18,
+    0x4d, 0x8b, 0x41, 0x20, 0x4d, 0x8b, 0x59, 0x28, 0x4d, 0x8b, 0x69, 0x30, 0x4d, 0x8b, 0x71, 0x40,
+    0x41, 0xff, 0x51, 0x38, 0x48, 0x89, 0xdc, 0x41, 0x5e, 0x41, 0x5d, 0x5f, 0x5e, 0x5d, 0x5b, 0xc3
 };
-typedef struct { ULONG_PTR rax, rsi, rdi, rcx, r8, r11, r13; unsigned char *code; } entry_state;
+typedef struct { ULONG_PTR rax, rsi, rdi, rcx, r8, r11, r13; unsigned char *code; ULONG_PTR r14; } entry_state;
 typedef void (*frame_runner)(unsigned char *rsp_before_call, unsigned char *rbp, void *unused, entry_state *entry);
 
-typedef struct { ULONG_PTR rax, r8; float xmm0; } exit_state;
+typedef struct { ULONG_PTR rax, r8, rcx; float xmm0; } exit_state;
 
 static unsigned char *game, *rsp_at_site, *rbp_at_site;
 static exit_state *seen;
@@ -50,6 +51,9 @@ static void put_exit_probe(unsigned char *at) {
     at += 7;
     at[0] = 0x4c; at[1] = 0x89; at[2] = 0x05;
     *(INT32 *)(at + 3) = (INT32)((unsigned char *)&seen->r8 - (at + 7));
+    at += 7;
+    at[0] = 0x48; at[1] = 0x89; at[2] = 0x0d;
+    *(INT32 *)(at + 3) = (INT32)((unsigned char *)&seen->rcx - (at + 7));
     at += 7;
     at[0] = 0xf3; at[1] = 0x0f; at[2] = 0x11; at[3] = 0x05;
     *(INT32 *)(at + 4) = (INT32)((unsigned char *)&seen->xmm0 - (at + 8));
@@ -103,10 +107,41 @@ static const float GUN_TURN[12] = {
     0, 0, GUN_SCALE, 0
 };
 
+#define SLOT_STATIC 0x78
+#define SITE_ENTITY 0x108
+#define SITE_MATRIX 0x38
+#define STATIC_MARK 0x7878
+
+static void *entity_of(unsigned char *instance) {
+    return instance ? instance + 0x40 : NULL;
+}
+
+static const float *run_part_drawn(const float *matrix, void *entity, int in_camera_space) {
+    static unsigned char part[0x100];
+    static const float *params[4];
+    float *held = (float *)(part + SLOT_MATRIX), *spare = (float *)(rbp_at_site - SITE_MATRIX);
+    memcpy(held, matrix, 12 * sizeof(float));
+    memset(spare, 0xcd, 12 * sizeof(float));
+    if (in_camera_space) memcpy(spare, matrix, 12 * sizeof(float));
+    *(ULONG_PTR *)(part + SLOT_STATIC) = STATIC_MARK;
+    *(void **)(rbp_at_site + SITE_ENTITY) = entity;
+    params[0] = in_camera_space ? spare : held;
+    memset(seen, 0, sizeof(*seen));
+    entry_state entry = {.rax = 0x1234, .rsi = (ULONG_PTR)part, .r8 = 0x5678, .r13 = (ULONG_PTR)pass, .code = game + PART_DRAWN_RVA,
+                         .r14 = (ULONG_PTR)params};
+    run(rsp_at_site + 8, rbp_at_site, NULL, &entry);
+    require(seen->rax == 0x1234 && seen->rcx == STATIC_MARK && seen->r8 == (ULONG_PTR)pass);
+    require(!memcmp(held, matrix, 12 * sizeof(float)));
+    require(params[0] == held || params[0] == spare);
+    require(in_camera_space ? params[0] == spare && !memcmp(spare, matrix, 12 * sizeof(float)) : 1);
+    return in_camera_space || params[0] == held ? NULL : params[0];
+}
+
 static void run_slot_drawn_with(const float *matrix, unsigned char *instance) {
-    float *location = (float *)(rbp_at_site - 0x38);
+    float *location = (float *)(rbp_at_site - SITE_MATRIX);
     memcpy(location, matrix, 12 * sizeof(float));
     *(unsigned char **)(slot + SLOT_CHARACTER) = instance;
+    *(void **)(rbp_at_site + SITE_ENTITY) = entity_of(instance);
     memset(seen, 0, sizeof(*seen));
     entry_state entry = {.rax = 0x1234, .rsi = (ULONG_PTR)slot, .r8 = 0x5678, .r13 = (ULONG_PTR)pass, .code = game + SLOT_DRAWN_RVA};
     run(rsp_at_site + 8, rbp_at_site, NULL, &entry);
@@ -202,6 +237,16 @@ static void skin_into(unsigned char *instance, float (*into)[8]) {
 
 static void run_skinning(unsigned char *instance) {
     skin_into(instance, quats);
+}
+
+static double skin_shift_size(void) {
+    double size = 0;
+    for (int j = 0; j < JOINTS; j++) {
+        float moved[3];
+        translation_of(quats[j], moved);
+        for (int i = 0; i < 3; i++) size = fmax(size, fabs(moved[i] - JOINT_PLACES[j][i]));
+    }
+    return size;
 }
 
 static void local_shift(const double *world, double *local) {
@@ -475,6 +520,9 @@ static void reset_sight(void) {
     for (int i = 0; i < 8; i++) sight_joint[i] = i == 3;
     pin_wanted = pin_ready = pin_live = pin_rowed = 0;
     pin_frames = pin_level_skins = 0;
+    memset(&gun_shown, 0, sizeof(gun_shown));
+    part_draws = 0;
+    part_peak = 0;
     pin_weight = 0;
     pin_weight_at = fake_now;
     pin_share_frame = pin_step_frame = -1;
@@ -517,6 +565,42 @@ static void pin_axes(const sight_scene *scene, double *line, double *upward) {
     for (int i = 0; i < 3; i++) line[i] /= size;
     size = sqrt(dot3(upward, upward));
     for (int i = 0; i < 3; i++) upward[i] /= size;
+}
+
+typedef struct {
+    int moved;
+    double gap, left;
+} part_seen;
+
+static void part_matrix(const sight_scene *scene, const double *pin, float *out) {
+    memcpy(out, scene->location, 12 * sizeof(float));
+    for (int i = 0; i < 3; i++)
+        out[4 * i + 3] = (float)((double)scene->location[4 * i + 3] + scene->location[4 * i] * pin[0] + scene->location[4 * i + 1] * pin[1] +
+                                 scene->location[4 * i + 2] * pin[2]);
+}
+
+static part_seen part_shown(const sight_scene *scene, const double *pin, void *entity) {
+    float held[12];
+    double on_gun[3], q[4] = {scene->gun_quats[0][0], scene->gun_quats[0][1], scene->gun_quats[0][2], scene->gun_quats[0][3]};
+    part_matrix(scene, pin, held);
+    const float *drawn = run_part_drawn(held, entity, 0);
+    dual_apply(scene->gun_quats[0], pin, on_gun);
+    part_seen out = {drawn != NULL, 0, 0};
+    for (int i = 0; i < 3; i++) {
+        double want = (double)scene->location[4 * i + 3] + scene->location[4 * i] * on_gun[0] + scene->location[4 * i + 1] * on_gun[1] +
+                      scene->location[4 * i + 2] * on_gun[2];
+        out.gap = fmax(out.gap, fabs((double)(drawn ? drawn : held)[4 * i + 3] - want));
+        out.left += pow((double)held[4 * i + 3] - want, 2);
+    }
+    out.left = sqrt(out.left);
+    for (int k = 0; drawn && k < 3; k++) {
+        double axis[3] = {k == 0, k == 1, k == 2}, turned[3];
+        rotate(q, axis, turned);
+        for (int i = 0; i < 3; i++)
+            require(fabs(drawn[4 * i + k] - (scene->location[4 * i] * turned[0] + scene->location[4 * i + 1] * turned[1] +
+                                             scene->location[4 * i + 2] * turned[2])) < 1e-5);
+    }
+    return out;
 }
 
 static double angle_to(const double *v, double x, double y, double z) {
@@ -601,6 +685,7 @@ int main(void) {
     put_exit_probe(game + CAMERA_BONE_ADD_RVA + ADD_LOOP_LENGTH);
     put_exit_probe(game + ATTACHMENT_ADD_RVA + ADD_LOOP_LENGTH);
     put_exit_probe(game + SLOT_DRAWN_RVA + SLOT_DRAWN_LENGTH);
+    put_exit_probe(game + PART_DRAWN_RVA + PART_DRAWN_LENGTH);
     game[SKINNING_SIGNATURE_RVA + sizeof(SKINNING_CALL_BYTES)] = 0xc3;
     *(float **)(pass + PASS_CAMERA_AT) = pass_camera;
     static const unsigned char MARK_COMPUTED[] = {0xc6, 0x41, COMPUTED_MARK, 0x01, 0xc3};
@@ -642,8 +727,11 @@ int main(void) {
     for (int i = 0; i < 3; i++) pass_camera[3 + 4 * i] = camera_float[i];
     run_slot_drawn(gun_float, gun_instance);
     run_skinning(gun_instance);
+    require(!run_part_drawn(GUN_TURN, entity_of(gun_instance), 0));
 
     require(precision_install(game));
+    require(!run_part_drawn(GUN_TURN, entity_of(gun_instance), 0) && !part_draws);
+    puts("ok   a part keeps its place while no gun is shown");
     for (size_t c = 0; c < ADD_CASES; c++) {
         float after[3];
         run_add(c, after);
@@ -718,6 +806,32 @@ int main(void) {
     puts("ok   the shifted gun sits at its exact offset from the exact camera");
     require(pass_camera_offset == PASS_CAMERA_AT && pass_same > 0 && !pass_differ);
     puts("ok   the pass camera is found and matches the rounded camera");
+
+    memset(shifts, 0, sizeof(shifts));
+    m4_body_instance = NULL;
+    pass_camera[3] += 2;
+    run_slot_drawn(BODY, other_instance);
+    pass_camera[3] = camera_float[0];
+    run_skinning(other_instance);
+    require(!m4_body_instance && skin_shift_size() < 3e-7);
+    puts("ok   a copy of Henry drawn on his spot from another view keeps its skin and is not his body");
+    run_slot_drawn(BODY, body_instance);
+    run_skinning(body_instance);
+    require(m4_body_instance == (void *)body_instance && skin_shift_size() > 1e-6);
+    fake_now += CAMERA_FRESH_S + 0.01;
+    m4_body_instance = NULL;
+    run_slot_drawn(BODY, other_instance);
+    run_skinning(body_instance);
+    require(!m4_body_instance && skin_shift_size() < 3e-7);
+    run_skinning(other_instance);
+    require(skin_shift_size() < 3e-7);
+    puts("ok   a camera that stopped feeding rests the body correction");
+    float fed[3];
+    run_add(0, fed);
+    run_slot_drawn(BODY, body_instance);
+    run_skinning(body_instance);
+    require(m4_body_instance == (void *)body_instance && skin_shift_size() > 1e-6);
+    puts("ok   the body correction is back with the camera's next feed");
 
     enum { KEPT, ON_RAY, SWAYS, LAGS, PULLED, LOCKED, KICKED, LET_GO, STEADY, SMOOTH };
     const struct {
@@ -1205,6 +1319,92 @@ int main(void) {
             printf("ok   pin %s\n", pin_cases[c].name);
         }
     }
+    {
+        static const double TRIGGER_PIN[3] = {0.0541092, -0.0287817, 0.2016320}, SELECTOR_PIN[3] = {0.0590212, -0.0375654, 0.1732567};
+        const double *const pins[] = {TRIGGER_PIN, SELECTOR_PIN};
+        const LONG all = PRECISION_CAMERA | PRECISION_GUN | PRECISION_SIGHT | PRECISION_FOLLOW | PRECISION_HOLD | PRECISION_PIN;
+        void *gun_entity = entity_of(gun_instance);
+        sight_scene scene;
+        float held[12];
+        m4_sway_move = m4_sway_lean = m4_sway_look = 0;
+        m4_pin_body = 100000;
+        tag_armed = 1;
+        since_shot = 1e12;
+        view_norm = 1;
+        for (int scaled = 0; scaled < 2; scaled++) {
+            double scale = scaled ? GUN_SCALE : 1, worst = 0, left = 0;
+            reset_sight();
+            m4_precision = all;
+            stance = 1;
+            aimed = 0;
+            sight_depth = 0.3;
+            pin_ready = pin_wanted = 1;
+            for (int frame = 0; frame < 120; frame++) {
+                sight_run(&scene, -20, 200, 10, 40 + 60 * sin(2 * M_PI * 5 * frame / SIGHT_TEST_FPS), 0, 0, scale, gun_instance, "gG");
+                for (size_t k = 0; k < sizeof(pins) / sizeof(pins[0]); k++) {
+                    part_seen part = part_shown(&scene, pins[k], gun_entity);
+                    require(part.moved);
+                    worst = fmax(worst, part.gap);
+                    left = fmax(left, part.left);
+                }
+            }
+            require(worst < 4e-4 && left > 0.05);
+            require(part_draws == 240 && fabs(part_peak - left) < 1e-3);
+            printf("ok   the parts of a %spinned gun show on it (%.3f mm off their pins, %.0f mm off where their slots put them)\n",
+                   scaled ? "scaled " : "", worst * 1000, left * 1000);
+        }
+        part_matrix(&scene, SELECTOR_PIN, held);
+        require(!run_part_drawn(held, entity_of(other_instance), 0));
+        puts("ok   a part of another entity keeps its place");
+        require(!run_part_drawn(held, gun_entity, 1));
+        puts("ok   a part drawn in camera space keeps its place");
+        float view_at = pass_camera[3];
+        pass_camera[3] += 0.01f;
+        run_slot_drawn_with(scene.location, gun_instance);
+        pass_camera[3] = view_at;
+        require(run_part_drawn(held, gun_entity, 0));
+        puts("ok   another view of the gun leaves its parts on it");
+        camera_frame += SHIFT_FRAMES + 1;
+        require(!run_part_drawn(held, gun_entity, 0));
+        camera_frame -= SHIFT_FRAMES + 1;
+        require(run_part_drawn(held, gun_entity, 0));
+        puts("ok   a part drawn frames after the gun keeps its place");
+        fake_now += CAMERA_FRESH_S + 0.01;
+        require(!run_part_drawn(held, gun_entity, 0));
+        fake_now -= CAMERA_FRESH_S + 0.01;
+        require(run_part_drawn(held, gun_entity, 0));
+        puts("ok   a part drawn after the camera stopped feeding keeps its place");
+        pin_wanted = 0;
+        for (int frame = 0; frame < 30; frame++) sight_run(&scene, -20, 200, 10, 60, 0, 0, GUN_SCALE, gun_instance, "gG");
+        require(pin_weight == 0 && !pin_live);
+        require(!part_shown(&scene, SELECTOR_PIN, gun_entity).moved);
+        puts("ok   the parts of a gun handed back to its clip keep their place");
+        reset_sight();
+        m4_precision = all;
+        stance = 0;
+        aimed = 1;
+        sight_depth = 0.31;
+        pin_ready = 1;
+        double worst = 0, left = 0;
+        for (int frame = 0; frame < 120; frame++) {
+            sight_run(&scene, 0, 30, 0, 2, 0, 0, 1, gun_instance, "gG");
+            part_seen part = part_shown(&scene, SELECTOR_PIN, gun_entity);
+            require(part.moved);
+            worst = fmax(worst, part.gap);
+            left = fmax(left, part.left);
+        }
+        require(worst < 4e-4 && left > 2e-3);
+        printf("ok   the parts of an aimed gun follow it onto the ray (%.3f mm off their pins, %.2f mm off where their slots put them)\n",
+               worst * 1000, left * 1000);
+        m4_precision = PRECISION_CAMERA | PRECISION_GUN;
+        sight_run(&scene, 0, 30, 0, 2, 0, 0, 1, gun_instance, "gG");
+        require(!part_shown(&scene, SELECTOR_PIN, gun_entity).moved);
+        puts("ok   the parts keep their place with the sight fix off");
+        m4_precision = all;
+        stance = 1;
+        sight_depth = 0.3;
+        pin_wanted = 1;
+    }
     sway_cases();
     {
         m4_sway_move = m4_sway_lean = m4_sway_look = 0;
@@ -1380,10 +1580,11 @@ int main(void) {
     require(header_fields == row_fields);
     printf("ok   m4_pin.csv rows have %d fields like the header\n", row_fields);
     pin_frames = 3;
+    part_draws = 2;
     camera_adds = 1;
     report();
-    require(pin_report_lines == 1);
-    puts("ok   the report prints the pin line");
+    require(pin_report_lines == 1 && part_report_lines == 1);
+    puts("ok   the report prints the pin line and the parts line");
     reset_sight();
 
     static const struct {

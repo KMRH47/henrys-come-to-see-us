@@ -3958,7 +3958,7 @@ function M4Carbine.AutoArmTick()
 	pcall(autoArm)
 end
 
-M4Carbine.back = {angles = {x = math.rad(5.3), y = math.rad(-17.1), z = math.rad(-54.5)}, pos = {x = 0.084, y = 0.044, z = 0.028}, entity = nil, dirty = true, reload = true, rescan = 1, scanAt = nil}
+M4Carbine.back = {angles = {x = math.rad(5.3), y = math.rad(-17.1), z = math.rad(-54.5)}, pos = {x = 0.084, y = 0.044, z = 0.028}, entity = nil, dirty = true, reload = true, rescan = 1, scanAt = nil, twinWindow = 10}
 
 function M4Carbine.SyncBack()
 	local back = M4Carbine.back
@@ -3986,6 +3986,8 @@ function M4Carbine.BackFrame(player)
 		System.LogAlways("M4CARBINE back entity " .. tostring(entity))
 	end
 	local gun = back.entity and System.GetEntity(back.entity)
+	if gun then back.seenAt = M4Carbine.Now() end
+	pcall(M4Carbine.TwinBack, back)
 	if not gun then return end
 	local at, slot = gun:GetWorldPos(), player:GetBonePos('BackSlot_cannon')
 	if back.reload or math.abs(at.x - slot.x) + math.abs(at.y - slot.y) + math.abs(at.z - slot.z) < 0.01 then
@@ -3994,7 +3996,15 @@ function M4Carbine.BackFrame(player)
 		M4Carbine.When(function() return true end, function() player:SetAttachmentAngles(0, 'weapon_cannon', back.angles, false) end)
 		System.LogAlways("M4CARBINE back slot set")
 	end
-	pcall(M4Carbine.TwinBack, back)
+end
+
+function M4Carbine.LayersText(entity)
+	local text = ''
+	for layer = 0, 15 do
+		local ok, running = pcall(entity.IsAnimationRunning, entity, 0, layer)
+		text = text .. (not ok and '?' or running and '1' or '0')
+	end
+	return text
 end
 
 -- A conversation draws DialogTwin_Dude, a fresh copy of Henry whose back slot
@@ -4002,10 +4012,18 @@ end
 -- The turn goes on a tick after the position, as for Henry.
 function M4Carbine.TwinBack(back)
 	local twin = System.GetEntityByName('DialogTwin_Dude')
-	if not twin then back.twin = nil; return end
-	if not twin:IsHidden() then M4Carbine.overlay.talkAt = M4Carbine.Now() end
-	if M4Carbine.inHand or back.twin == tostring(twin.id) then return end
-	back.twin = tostring(twin.id)
+	if not twin then back.twin, back.talk, back.twinNoted = nil, nil, nil; return end
+	local now, key, shown = M4Carbine.Now(), tostring(twin.id), not twin:IsHidden()
+	if shown then M4Carbine.overlay.talkAt = now else back.talk, back.twinNoted = nil, nil end
+	if back.seenAt and now - back.seenAt < back.twinWindow then back.talk = true end
+	if shown and back.twinNoted ~= key then
+		back.twinNoted = key
+		System.LogAlways(string.format("M4CARBINE talk copy shown t=%.3f hand=%s gun=%s carried=%s since=%s reload=%s layers %s copy %s",
+			now, tostring(M4Carbine.inHand), tostring(back.entity), tostring(back.talk), back.seenAt and string.format("%.1f", now - back.seenAt) or "never",
+			tostring(M4Carbine.mag.reloading), M4Carbine.LayersText(M4Carbine.Dude()), M4Carbine.LayersText(twin)))
+	end
+	if M4Carbine.inHand or not back.talk or back.twin == key then return end
+	back.twin = key
 	twin:SetAttachmentPos(0, 'weapon_cannon', back.pos, false)
 	M4Carbine.When(function() return true end, function() twin:SetAttachmentAngles(0, 'weapon_cannon', back.angles, false) end)
 	System.LogAlways("M4CARBINE twin back slot set")
@@ -4149,7 +4167,7 @@ function M4Carbine.Attach()
 				if overlay.crouchDipAt < 0 then overlay.crouchArmAt = overlay.stancePressAt end
 			end
 			if action == M4Carbine.mag.key and activation == "press" and M4Carbine.inHand then M4Carbine.MagReload() end
-			if action == "chat_init_with_focus" and activation == "press" then M4Carbine.magModel.chatAt = M4Carbine.Now() end
+			if (action == "chat_init_with_focus" or action == "chat_init_press") and activation == "press" then M4Carbine.magModel.chatAt = M4Carbine.Now() end
 			M4Carbine.Try("LightPress", M4Carbine.LightPress, action, activation)
 			if action == "gun_prepare" or action == "gun_abort" then overlay.rmb = activation == "press" end
 			if action == "gun_prepare" and activation == "press" then overlay.aimGuess = false end
