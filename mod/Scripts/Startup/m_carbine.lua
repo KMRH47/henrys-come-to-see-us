@@ -584,7 +584,17 @@ function M4Carbine.FingerTick(player)
 	player:StartAnimation(0, clip or M4Carbine.overlay.blank, layer, blend, 1, clip ~= false)
 end
 
-M4Carbine.trigger = {cgf = "objects/manmade/weapons/firearms/m4_trigger.cgf", slot = 5, pin = {x = 0.0541092, y = -0.0287817, z = 0.2016320}, angles = {x = -0.074543, y = -0.143317, z = 0.037785}, w = 0, entity = nil, drawn = {}}
+M4Carbine.trigger = {cgf = "objects/manmade/weapons/firearms/m4_trigger.cgf", slot = 5, pin = {x = 0.0541092, y = -0.0287817, z = 0.2016320}, angles = {x = -0.074543, y = -0.143317, z = 0.037785}, w = 0, entity = nil, drawn = {}, resting = {[0] = "m4_trigger_rest", [1] = "m4_trigger_pulled"}, characters = {0, 2}}
+
+function M4Carbine.TriggerShown(gun)
+	local trigger = M4Carbine.trigger
+	if not trigger.drawn[tostring(gun.id)] then return end
+	local w = trigger.entity == gun.id and trigger.w or 0
+	for _, slot in ipairs(trigger.characters) do
+		for at, skin in pairs(trigger.resting) do gun:HideAttachment(slot, skin, at ~= w, at ~= w) end
+	end
+	gun:DrawSlot(trigger.slot, trigger.resting[w] and 0 or 1)
+end
 
 function M4Carbine.TriggerModel(gun)
 	local trigger = M4Carbine.trigger
@@ -592,6 +602,7 @@ function M4Carbine.TriggerModel(gun)
 	trigger.drawn[tostring(gun.id)] = true
 	gun:LoadObject(trigger.slot, trigger.cgf)
 	gun:SetSlotPos(trigger.slot, trigger.pin)
+	M4Carbine.TriggerShown(gun)
 	System.LogAlways("M4TRIGGER drawn on " .. tostring(gun.id))
 end
 
@@ -603,11 +614,12 @@ function M4Carbine.TriggerTick()
 	if not finger.on and trigger.entity == nil then return end
 	if trigger.entity and (gun == nil or gun.id ~= trigger.entity) then
 		local was = System.GetEntity(trigger.entity)
+		trigger.entity, trigger.w = nil, 0
 		if was then
 			was:SetSlotPos(trigger.slot, trigger.pin)
 			was:SetSlotAngles(trigger.slot, {x = 0, y = 0, z = 0})
+			M4Carbine.TriggerShown(was)
 		end
-		trigger.entity, trigger.w = nil, 0
 	end
 	if not gun then return end
 	local dt = System.GetFrameTime()
@@ -617,9 +629,20 @@ function M4Carbine.TriggerTick()
 	local a = trigger.angles
 	gun:SetSlotPos(trigger.slot, trigger.pin)
 	gun:SetSlotAngles(trigger.slot, {x = a.x * w, y = a.y * w, z = a.z * w})
+	M4Carbine.TriggerShown(gun)
 end
 
-M4Carbine.selector = {cgf = "objects/manmade/weapons/firearms/m4_selector.cgf", slot = 6, pin = {x = 0.0590212, y = -0.0375654, z = 0.1732567}, semi = {x = -1.507357, y = -0.915531, z = 1.254332}, drawn = {}}
+M4Carbine.selector = {cgf = "objects/manmade/weapons/firearms/m4_selector.cgf", slot = 6, pin = {x = 0.0590212, y = -0.0375654, z = 0.1732567}, semi = {x = -1.507357, y = -0.915531, z = 1.254332}, resting = {[false] = "m4_selector_auto", [true] = "m4_selector_semi"}, characters = {0, 2}, drawn = {}}
+
+function M4Carbine.SelectorShown(gun)
+	local selector = M4Carbine.selector
+	local drawn = selector.drawn[tostring(gun.id)]
+	if drawn == nil then return end
+	for _, slot in ipairs(selector.characters) do
+		for single, skin in pairs(selector.resting) do gun:HideAttachment(slot, skin, single ~= drawn, single ~= drawn) end
+	end
+	gun:DrawSlot(selector.slot, drawn == "turning" and 1 or 0)
+end
 
 function M4Carbine.SelectorModel(gun, single)
 	local selector = M4Carbine.selector
@@ -630,6 +653,7 @@ function M4Carbine.SelectorModel(gun, single)
 	selector.drawn[key] = single
 	gun:SetSlotPos(selector.slot, selector.pin)
 	gun:SetSlotAngles(selector.slot, single and selector.semi or {x = 0, y = 0, z = 0})
+	M4Carbine.SelectorShown(gun)
 end
 
 M4Carbine.selectorSwitch = {
@@ -709,7 +733,10 @@ function M4Carbine.SelectorSwitching(gun)
 		gun:LoadObject(selector.slot, selector.cgf)
 		gun:SetSlotPos(selector.slot, selector.pin)
 	end
-	selector.drawn[key] = "turning"
+	if selector.drawn[key] ~= "turning" then
+		selector.drawn[key] = "turning"
+		M4Carbine.SelectorShown(gun)
+	end
 	System.GetCVar("m4_selector_busy")
 	local from = switch.single and 0 or timing.autoFrom
 	local played = M4Carbine.Dude():GetAnimationTime(0, switch.layer)
@@ -756,7 +783,7 @@ function M4Carbine.SightModel(item)
 	for _, slot in ipairs(sight.characters) do
 		gun:HideAttachment(slot, sight.dot, true, true)
 		gun:HideAttachment(slot, sight.dark, not mounted, not mounted)
-		gun:HideAttachment(slot, sight.irons, mounted, mounted)
+		gun:HideAttachment(slot, sight.irons, mounted, true)
 	end
 	if sight.dotGun == gun.id then sight.dotGun = nil end
 	System.LogAlways("M4SIGHT " .. (mounted and "red dot" or "irons") .. " on " .. tostring(gun.id))
@@ -1444,6 +1471,8 @@ M4Carbine.magModel = M4Carbine.magModel or {
 	cgf = "objects/manmade/weapons/firearms/m4_mag.cgf",
 	assistCgf = "objects/manmade/weapons/firearms/m4_assist.cgf",
 	catchCgf = "objects/manmade/weapons/firearms/m4_catch.cgf",
+	resting = {[1] = "m4_mag_rest", [3] = "m4_assist_rest", [4] = "m4_catch_rest"},
+	shown = {},
 	body = {cgf = "objects/default/primitive_box.cgf", lo = {x = -0.1, y = -0.1, z = 0}, hi = {x = 0.1, y = 0.1, z = 0.2}},
 	bone = "LeftWeapon_IKTarget",
 	empty = "reload2",
@@ -1521,11 +1550,15 @@ function M4Carbine.MagModelStart()
 	if not gun then return end
 	gun:LoadCharacter(2, model.bare)
 	M4Carbine.sight.drawn[tostring(gun.id)] = nil
+	M4Carbine.SelectorShown(gun)
+	M4Carbine.TriggerShown(gun)
 	if M4Carbine.light.lit == gun.id then M4Carbine.LightGlow(gun, true) end
 	gun:DrawSlot(0, 0)
 	gun:LoadObject(1, model.cgf)
 	gun:LoadObject(3, model.assistCgf)
 	gun:LoadObject(4, model.catchCgf)
+	model.shown = {}
+	for slot in pairs(model.resting) do M4Carbine.MagPartShown(gun, slot, false, false) end
 	model.entity, model.startedAt, model.dropped, model.was, model.sounded = gun.id, M4Carbine.Now(), false, nil, {}
 	-- From the aim the arms are far from the clip's first key, so they blend in
 	-- slower (A759, user: "still not good enough").
@@ -1540,6 +1573,19 @@ end
 function M4Carbine.MagPace()
 	local reload = M4Carbine.magModel.playing
 	return reload.seconds / reload.reloadSeconds
+end
+
+function M4Carbine.MagPartShown(gun, slot, moved, hidden)
+	local model = M4Carbine.magModel
+	local shown = hidden and "hidden" or moved and "moving" or "resting"
+	if model.shown[slot] == shown then return end
+	model.shown[slot] = shown
+	gun:HideAttachment(2, model.resting[slot], shown ~= "resting", shown ~= "resting")
+	gun:DrawSlot(slot, shown == "moving" and 1 or 0)
+end
+
+function M4Carbine.PartMoved(at)
+	return at.x ~= 0 or at.y ~= 0 or at.z ~= 0
 end
 
 function M4Carbine.MagModelEnd(gun)
@@ -1806,7 +1852,7 @@ function M4Carbine.MagTick()
 		M4Carbine.MagDrop(player, model, model.was, now)
 	end
 	model.was = {pos = pos or player:GetBonePos(model.bone), t = now}
-	gun:DrawSlot(1, (t >= model.playing.hidden[1] and t < model.playing.hidden[2]) and 0 or 1)
+	M4Carbine.MagPartShown(gun, 1, at ~= magZeroPos, t >= model.playing.hidden[1] and t < model.playing.hidden[2])
 	if M4Carbine.trace then
 		local spine, out = player:GetBonePos('Spine2'), ''
 		for _, b in ipairs({'RightHandSlot', 'LeftHand', 'Head'}) do
@@ -1819,10 +1865,13 @@ function M4Carbine.MagTick()
 	end
 	gun:SetSlotPos(1, at)
 	gun:SetSlotAngles(1, angles)
-	gun:SetSlotPos(3, M4Carbine.PartAt(model.playing.assist, t))
+	local assist = M4Carbine.PartAt(model.playing.assist, t)
+	gun:SetSlotPos(3, assist)
+	M4Carbine.MagPartShown(gun, 3, M4Carbine.PartMoved(assist), false)
 	local catch = {pos = M4Carbine.PartAt(model.playing.catchPos, t), angles = M4Carbine.PartAt(model.playing.catchAngles, t)}
 	gun:SetSlotPos(4, catch.pos)
 	gun:SetSlotAngles(4, catch.angles)
+	M4Carbine.MagPartShown(gun, 4, M4Carbine.PartMoved(catch.pos) or M4Carbine.PartMoved(catch.angles), false)
 	model.catch = #model.playing.catchAngles > 0 and catch or nil
 end
 
@@ -2179,10 +2228,11 @@ function M4Carbine.StanceSwap(player, wanted)
 		overlay.phaseClip, overlay.startTurn = nil, nil
 		local lightOn = idle == overlay.lowClip and not wasLow and not overlay.cover and not overlay.liftStopAt
 		if lightOn then blend = 0 end
+		local gridOut = overlay.idleClip == overlay.lowClip and not low
 		M4Carbine.HoldFade(overlay.idleClip, blend)
 		overlay.idleClip = idle
 		overlay.gridDir = 0
-		if lightOn then M4Carbine.LightLift(player) else M4Carbine.PlayIdle(player, blend) end
+		if lightOn then M4Carbine.LightLift(player) elseif gridOut then M4Carbine.PlayIdleAtGridSpeed(player, blend) else M4Carbine.PlayIdle(player, blend) end
 		System.LogAlways("M4CARBINE overlay idle " .. overlay.idleClip)
 		return true
 	end
@@ -2675,6 +2725,14 @@ end
 function M4Carbine.HoldTick()
 	local overlay = M4Carbine.overlay
 	overlay.holdLeft = overlay.holdLeft - System.GetFrameTime()
+	local hold = overlay.gridSpeedHold
+	if not hold then return end
+	if overlay.state ~= "on" or overlay.idleClip ~= hold or overlay.holdFrom ~= overlay.lowClip then
+		overlay.gridSpeedHold = nil
+	elseif M4Carbine.LowOwner() == hold then
+		overlay.gridSpeedHold = nil
+		M4Carbine.Dude():SetAnimationSpeed(0, overlay.layer, 1)
+	end
 end
 
 function M4Carbine.LowOwner()
@@ -2786,6 +2844,12 @@ function M4Carbine.PlayIdle(player, blend)
 	local overlay = M4Carbine.overlay
 	local speed = (overlay.idleClip == overlay.lowRunClip or overlay.idleClip == overlay.lowSprintClip) and overlay.lowStrideScale or 1
 	player:StartAnimation(0, overlay.idleClip, overlay.layer, blend * speed, speed, true)
+end
+
+function M4Carbine.PlayIdleAtGridSpeed(player, blend)
+	local overlay = M4Carbine.overlay
+	overlay.gridSpeedHold = overlay.idleClip
+	player:StartAnimation(0, overlay.idleClip, overlay.layer, blend * overlay.stanceSpeed, overlay.stanceSpeed, true)
 end
 
 function M4Carbine.Lift(player, clip, blend)
@@ -3079,6 +3143,54 @@ function M4Carbine.PinTag()
 	end
 end
 
+M4Carbine.untilt = {clip = "settle_medium_02_additive", lead = 1, rows = 161, cols = 81, low = -40, rowStep = 0.5, colStep = 1,
+	from = 2.5, full = 3.5, ease = 0.1, w = 0, a = 0, b = 0, loggedAt = -1, logEvery = 0.5, slopeLow = nil, slopeHigh = nil}
+
+function M4Carbine.UntiltFade()
+	local tilt = M4Carbine.untilt
+	if tilt.w == 0 then return end
+	local k = math.exp(-System.GetFrameTime() / tilt.ease)
+	tilt.w, tilt.a, tilt.b = tilt.w * k, tilt.a * k, tilt.b * k
+	if tilt.w < 0.02 then tilt.w, tilt.a, tilt.b = 0, 0, 0 end
+end
+
+function M4Carbine.Untilt(player, hx, hy, right, sx, sy, sz)
+	local overlay, tilt = M4Carbine.overlay, M4Carbine.untilt
+	local vel = player:GetVelocity()
+	local speed = math.sqrt(vel.x * vel.x + vel.y * vel.y)
+	local held = overlay.idleClip == overlay.lowClip and not (overlay.lift and overlay.lift.clip == overlay.lowClip) and not M4Carbine.Crouched() and not M4Carbine.Mounted() and not M4Carbine.Reloading()
+	local want = held and clamp((speed - tilt.from) / (tilt.full - tilt.from), 0, 1) or 0
+	tilt.w = tilt.w + (want - tilt.w) * (1 - math.exp(-System.GetFrameTime() / tilt.ease))
+	if want == 0 and tilt.w < 0.02 then tilt.w = 0 end
+	if tilt.w == 0 then
+		tilt.a, tilt.b = 0, 0
+		return sx, sy, sz
+	end
+	local rest = overlay.lowGrid.hipsRest
+	local lx, ly, lz = hx.x * right.x + hy.x * right.y, hx.y * right.x + hy.y * right.y, hx.z * right.x + hy.z * right.y
+	local qx, qy, qz = rest[1] * lx + rest[2] * ly + rest[3] * lz, rest[4] * lx + rest[5] * ly + rest[6] * lz, rest[7] * lx + rest[8] * ly + rest[9] * lz
+	local level = math.sqrt(qx * qx + qy * qy)
+	if level < 0.01 then
+		tilt.a, tilt.b = 0, 0
+		return sx, sy, sz
+	end
+	local lean = clamp(-math.deg(math.atan2(qz, level)) * tilt.w, tilt.low, -tilt.low)
+	local kx, ky = -qy / level, qx / level
+	tilt.a, tilt.b = lean * kx, lean * ky
+	local rs, ls = player:GetBonePos('RightShoulder'), player:GetBonePos('LeftShoulder')
+	local dx, dy = rs.x - ls.x, rs.y - ls.y
+	local slope = math.deg(math.atan2(rs.z - ls.z, math.sqrt(dx * dx + dy * dy)))
+	tilt.slopeLow, tilt.slopeHigh = math.min(tilt.slopeLow or slope, slope), math.max(tilt.slopeHigh or slope, slope)
+	local now = M4Carbine.Now()
+	if now - tilt.loggedAt >= tilt.logEvery then
+		System.LogAlways(string.format("M4UNTILT speed=%.2f w=%.2f lean=%.1f a=%.1f b=%.1f shoulders=%.1f..%.1f", speed, tilt.w, lean, tilt.a, tilt.b, tilt.slopeLow, tilt.slopeHigh))
+		tilt.loggedAt, tilt.slopeLow, tilt.slopeHigh = now, nil, nil
+	end
+	local c, s = math.cos(math.rad(lean)), math.sin(math.rad(lean))
+	local along = kx * sx + ky * sy
+	return sx * c - ky * sz * s + kx * along * (1 - c), sy * c + kx * sz * s + ky * along * (1 - c), sz * c - (kx * sy - ky * sx) * s
+end
+
 -- The hip light grid is the aimed upper body on the standing hips, bent at the
 -- spine toward each cell (kcd2-forge-light-grid.py). The hips turn and lean
 -- under it with every stride, crouch and stop, so the cell is the view as the
@@ -3090,6 +3202,7 @@ function M4Carbine.LightScrub(player)
 	local grid = overlay.lowGrid
 	if overlay.state ~= "on" or M4Carbine.LowOwner() ~= overlay.lowClip then
 		grid.trimY, grid.trimP, grid.at, grid.turn, grid.over = 0, 0, nil, nil, 0
+		M4Carbine.UntiltFade()
 		return
 	end
 	local v, u, r = M4Carbine.AimAxes(player)
@@ -3107,6 +3220,7 @@ function M4Carbine.LightScrub(player)
 	local rest = grid.hipsRest
 	local lx, ly, lz = hx.x * v.x + hy.x * v.y + hz.x * v.z, hx.y * v.x + hy.y * v.y + hz.y * v.z, hx.z * v.x + hy.z * v.y + hz.z * v.z
 	local sx, sy, sz = rest[1] * lx + rest[2] * ly + rest[3] * lz, rest[4] * lx + rest[5] * ly + rest[6] * lz, rest[7] * lx + rest[8] * ly + rest[9] * lz
+	sx, sy, sz = M4Carbine.Untilt(player, hx, hy, r, sx, sy, sz)
 	local turnY, turnP = wrap(math.deg(math.atan2(-sx, sy)) - viewYaw), math.deg(math.asin(clamp(sz, -1, 1))) - viewPitch
 	grid.turn = turnY
 	local gy = clamp(wantY, grid.yawCenter - grid.yawSpan, grid.yawCenter + grid.yawSpan)
@@ -3146,7 +3260,7 @@ function M4Carbine.LightScrub(player)
 	local keyY = clamp(grid.y + turnY, grid.yawCenter - grid.yawSpan, grid.yawCenter + grid.yawSpan)
 	local keyP = clamp(grid.p + turnP, grid.pitchCenter - grid.pitchSpan, grid.pitchCenter + grid.pitchSpan)
 	-- A turn past the grid's pitch rows goes to RunSteer, which adds the rest.
-	grid.over = grid.p + turnP - keyP
+	grid.over, grid.keyY = grid.p + turnP - keyP, keyY
 	local row = math.floor((keyY - grid.yawCenter + grid.yawSpan) / grid.yawStep + 0.5)
 	local key = grid.lead + row * grid.pitches + (keyP - grid.pitchCenter + grid.pitchSpan) / grid.pitchStep
 	local last = grid.lead + grid.yaws * grid.pitches - 1
@@ -3166,9 +3280,10 @@ end
 M4Carbine.runSteer = {layer = 12, clip = "settle_medium_02_additive_upper", lead = 1, pitches = 41, pitchLow = -50, pitchStep = 2, ease = 0.08, p = 0, playing = false, seen = nil}
 
 function M4Carbine.RunSteer(player)
-	local overlay, steer = M4Carbine.overlay, M4Carbine.runSteer
+	local overlay, steer, tilt = M4Carbine.overlay, M4Carbine.runSteer, M4Carbine.untilt
 	if M4Carbine.Reloading() then
 		steer.playing, steer.p = false, 0
+		tilt.w, tilt.a, tilt.b = 0, 0, 0
 		return
 	end
 	local owner = M4Carbine.LowOwner()
@@ -3197,14 +3312,25 @@ function M4Carbine.RunSteer(player)
 			overlay.holdLeft, tostring(overlay.lowBraked), steer.p, want))
 		steer.seen = seen
 	end
-	if not active and math.abs(steer.p) < 0.1 then
+	local tilted = tilt.w > 0
+	if not active and not tilted and math.abs(steer.p) < 0.1 then
 		if steer.playing then player:StopAnimation(0, steer.layer) end
 		steer.playing, steer.p = false, 0
 		return
 	end
-	if not steer.playing or not player:IsAnimationRunning(0, steer.layer) then
-		player:StartAnimation(0, steer.clip, steer.layer, 0, overlay.stanceSpeed, true)
-		steer.playing = true
+	local clip = tilted and tilt.clip or steer.clip
+	if not steer.playing or steer.shown ~= clip or not player:IsAnimationRunning(0, steer.layer) then
+		player:StartAnimation(0, clip, steer.layer, 0, overlay.stanceSpeed, true)
+		steer.playing, steer.shown = true, clip
+	end
+	if tilted then
+		local yaw = math.rad(overlay.lowGrid.baseYaw + (overlay.lowGrid.keyY or 0))
+		local a = clamp(tilt.a + steer.p * math.cos(yaw), tilt.low, -tilt.low)
+		local b = clamp(tilt.b + steer.p * math.sin(yaw), tilt.low, -tilt.low)
+		local cells = tilt.lead + tilt.rows * tilt.cols - 1
+		local cell = tilt.lead + math.floor((a - tilt.low) / tilt.rowStep + 0.5) * tilt.cols + (b - tilt.low) / tilt.colStep
+		player:SetAnimationTime(0, steer.layer, math.min(cell, cells - 0.5) / cells)
+		return
 	end
 	local last = steer.lead + steer.pitches - 1
 	local key = steer.lead + (steer.p - steer.pitchLow) / steer.pitchStep
