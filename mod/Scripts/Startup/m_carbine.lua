@@ -98,33 +98,6 @@ end
 -- The silent frame mark tells the plugin each frame boundary, so full-auto
 -- presses are counted in frames and every shot lands the same frames apart.
 -- In the saddle the mounted mark lets the plugin reload on the move there only.
-M4Carbine.props = {names = {"powder_flask", "rifle_ignition", "rifle_ramrod"}, radius = 2, before = {}, every = 0.5, at = nil}
-
-function M4Carbine.MarkProps(player)
-	M4Carbine.props.before = {}
-	for _, entity in pairs(System.GetEntitiesInSphere(player:GetWorldPos(), M4Carbine.props.radius) or {}) do
-		M4Carbine.props.before[entity.id] = true
-	end
-end
-
-function M4Carbine.HideProps(player)
-	local props, now = M4Carbine.props, M4Carbine.Now()
-	if props.at and now - props.at >= 0 and now - props.at < props.every then return end
-	props.at = now
-	for _, entity in pairs(System.GetEntitiesInSphere(player:GetWorldPos(), props.radius) or {}) do
-		if not props.before[entity.id] and not entity:IsHidden() then
-			local name = entity:GetName()
-			for _, prop in ipairs(props.names) do
-				if string.find(name, prop, 1, true) == 1 then
-					entity:Hide(1)
-					System.LogAlways("M4CARBINE prop hidden " .. tostring(name))
-					break
-				end
-			end
-		end
-	end
-end
-
 -- A save load sets the game clock back to the save's time (25 s at 13:18:04),
 -- and every time the mod had stored then sat in the future: waits stalled and
 -- the raise skipped the grid, so a turned aim popped 27 cm (M4QUIRK
@@ -182,8 +155,29 @@ function M4Carbine.Error(name, err)
 	M4Carbine.Note("error", name .. ": " .. tostring(err))
 end
 
+M4Carbine.profile = M4Carbine.profile or {on = false, every = 1, marks = {}}
+
+function M4Carbine.Mark(step)
+	local marks = M4Carbine.profile.marks
+	marks[step] = marks[step] or ("m4_at_" .. step)
+	pcall(System.GetCVar, marks[step])
+end
+
+function M4Carbine.ProfileTick()
+	local profile, now = M4Carbine.profile, M4Carbine.Now()
+	if not profile.at or now < profile.at or now - profile.at >= profile.every then
+		profile.at = now
+		local ok, on = pcall(System.GetCVar, "m4_profile")
+		profile.on = ok and tonumber(on) == 1
+	end
+	return profile.on
+end
+
 function M4Carbine.Try(name, fn, ...)
+	local marked = M4Carbine.profile.on
+	if marked then M4Carbine.Mark(name) end
 	local ok, err = pcall(fn, ...)
+	if marked then M4Carbine.Mark("") end
 	if not ok then M4Carbine.Error(name, err) end
 end
 
@@ -330,6 +324,8 @@ end
 
 function M4Carbine.FrameTick(token)
 	if token ~= M4Carbine.frameToken then return end
+	local marked = M4Carbine.ProfileTick()
+	if marked then M4Carbine.Mark("FrameTick") end
 	M4Carbine.frameNo = M4Carbine.frameNo + 1
 	M4Carbine.overlay.tickAt = M4Carbine.Now()
 	M4Carbine.crouchedMemo.open = true
@@ -342,6 +338,7 @@ function M4Carbine.FrameTick(token)
 	M4Carbine.Try("MagTick", M4Carbine.MagTick)
 	M4Carbine.Try("MagDropsTick", M4Carbine.MagDropsTick)
 	M4Carbine.Try("SyncBack", M4Carbine.SyncBack)
+	M4Carbine.Try("CarryTick", M4Carbine.CarryTick)
 	M4Carbine.Try("DollTick", M4Carbine.DollTick)
 	M4Carbine.Try("PoseTick", M4Carbine.PoseTick)
 	M4Carbine.Try("RunWaits", M4Carbine.RunWaits)
@@ -356,6 +353,7 @@ function M4Carbine.FrameTick(token)
 	M4Carbine.Try("Watch", M4Carbine.Watch, player)
 	M4Carbine.crouchedMemo.open = false
 	M4Carbine.tickPlayer = nil
+	if marked then M4Carbine.Mark("") end
 	Script.SetTimer(1, M4Carbine.frameNext)
 end
 
@@ -384,7 +382,6 @@ function M4Carbine.FrameMarks(player)
 			M4Carbine.Try("StanceScrub", M4Carbine.StanceScrub, player)
 			M4Carbine.Try("MountScrub", M4Carbine.MountScrub, player)
 			M4Carbine.Try("RollReference", M4Carbine.RollReference, player)
-			M4Carbine.Try("HideProps", M4Carbine.HideProps, player)
 			M4Carbine.Try("HitTick", M4Carbine.HitTick, player)
 			M4Carbine.Try("MuzzleFlash", M4Carbine.MuzzleFlash, player)
 		end
@@ -394,6 +391,7 @@ function M4Carbine.FrameMarks(player)
 	M4Carbine.Try("LightTag", M4Carbine.LightTag)
 	M4Carbine.Try("DownedTick", M4Carbine.DownedTick)
 	M4Carbine.Try("PinTag", M4Carbine.PinTag)
+	M4Carbine.Try("SyncFarAim", M4Carbine.SyncFarAim, player)
 	M4Carbine.Try("HipShotTick", M4Carbine.HipShotTick)
 	M4Carbine.Try("CalmHorse", M4Carbine.CalmHorse, player)
 	M4Carbine.Try("BackFrame", M4Carbine.BackFrame, player)
@@ -442,6 +440,7 @@ function M4Carbine.MuzzleFlash(player)
 	if spent < 1 or spent > 3 then return end
 	M4Carbine.MagSpent(spent)
 	M4Carbine.finger.pressAt = M4Carbine.Now()
+	M4Carbine.spent.shotAt = M4Carbine.Now()
 	local at, dir = M4Carbine.FlashAt(player)
 	Particle.SpawnEffect(f.effect, at, dir, f.scale)
 	M4Carbine.Try("RoundHit", M4Carbine.RoundHit, player)
@@ -494,7 +493,7 @@ end
 function M4Carbine.HeadHitActor(at)
 	local shot, dude = M4Carbine.headshot, M4Carbine.Dude()
 	local best, bestD = nil, shot.near * shot.near
-	for _, entity in pairs(System.GetEntitiesInSphere(at, shot.search) or {}) do
+	for _, entity in pairs(System.GetPhysicalEntitiesInBox(at, shot.search) or {}) do
 		if entity.actor and entity ~= dude then
 			local p = entity:GetBonePos(shot.bone) or entity:GetWorldPos()
 			local dx, dy, dz = p.x - at.x, p.y - at.y, p.z - at.z
@@ -1918,6 +1917,24 @@ function M4Carbine.SyncLookIK(held)
 	System.LogAlways("M4CARBINE auto look " .. (off and "1" or "0"))
 end
 
+M4Carbine.farAim = 0
+
+function M4Carbine.SyncFarAim(player)
+	local overlay, probe = M4Carbine.overlay, KCD2ForgeViewProbe and KCD2ForgeViewProbe.state
+	if probe and probe.aiming then
+		M4Carbine.farAim = 0
+		return
+	end
+	local aim = 0
+	if player and M4Carbine.inHand and overlay.aimHeld and not overlay.holstering and M4Carbine.Mounted() and (tonumber(System.GetCVar("wh_pl_CameraFollowEntity")) or 0) ~= 0 then
+		local taken = player:IsAnimationRunning(0, M4Carbine.charge.chargeLayer)
+		aim = (M4Carbine.farAim == 2 or taken or overlay.state == "aim" and not M4Carbine.PressedDraw()) and 2 or 1
+	end
+	if aim == M4Carbine.farAim then return end
+	M4Carbine.farAim = aim
+	System.LogAlways("M4CARBINE auto aim " .. aim)
+end
+
 -- Aimed, the M4 zooms the view as the bow does: a bow aim halves the 63.09 deg
 -- view (FOVPROBE 2026-10-07). The engine eases every cl_fov change linearly over
 -- 1 s from where the view is, too slow for the M4, and a set every frame dropped
@@ -1988,7 +2005,7 @@ function M4Carbine.ZoomStep()
 end
 
 function M4Carbine.DoorClip()
-	for _, entity in pairs(System.GetEntitiesInSphere(M4Carbine.Dude():GetWorldPos(), M4Carbine.door.radius) or {}) do
+	for _, entity in pairs(System.GetPhysicalEntitiesInBox(M4Carbine.Dude():GetWorldPos(), M4Carbine.door.radius) or {}) do
 		if entity.class == "AnimDoor" and entity.inUse == 1 and string.find(tostring(entity.curAnim), "_player", 1, true) then return entity end
 	end
 end
@@ -2057,7 +2074,6 @@ function M4Carbine.Sync()
 			-- a quick slot draw taps the aim once in hand: the press it sends tells
 			-- a held aim to fade the draw into the aim (A691, user: "does not work").
 			if M4Carbine.PressedDraw() then M4Carbine.charge.pending = true end
-			pcall(M4Carbine.MarkProps, M4Carbine.Dude())
 		else
 			-- A holster swallows the aim release, and a held aim left behind kept
 			-- the idle hold off after the next draw and asked for recharges the
@@ -2151,7 +2167,7 @@ end
 -- A run stride dips the hips to 0.68 m too, so a run flipped the hold to the crouch
 -- one several times a second. The skeleton box top splits them: running it stays
 -- at 1.76 m or above, crouch walking at 1.72 m or below (logger 2026-10-02).
-M4Carbine.overlay = {clip = "rifle_walk_jump_rleg_start", crouchClip = "rifle_walk_jump_rleg_start_over", mountClip = "rifle_run_jump_rleg_land", mountAimClip = "photomode_tracking", mountGridClip = "photomode_victorious_01", mountEyeClip = "photomode_victorious_02", mountGrid = {yaws = 641, pitches = 25, downs = 1, down = 0, downStep = 0.6, rolls = 1, rollStep = 4, rollSpan = 0, rollRef = 66, rollSign = 0, roll = 0, yawStep = 0.05, pitchStep = 2.5, yawSpan = 16, pitchSpan = 30, gain = 0, steer = true, steerPole = 0.3, steerRamp = 0.25, hold = 0, aimYaw = -0.05, aimPitch = -0.05, camDrop = -0.05, camYaw = -0.05, camJump = 6, camHoldMax = 2, camHeld = 0, camMove = 0.003, camSettle = 0.3, eye = {pole = 0.3, layer = 13, rows = 801, planes = 9, plane = 4, span = 0.04, step = 0.0001, right = {x = 0.022495, y = 0.997421, z = 0.068151}, up = {x = 0.985039, y = -0.010463, z = -0.172012}}}, mountFix = nil, crouchHips = 0.70, crouchTop = 1.55, standHips = 0.8, crouchWindow = 0.6, crouchDipAt = -1, crouchArmAt = -1, airHips = 0.95, landing = false, landLow = 0, landRise = 0.02, crouchFloor = 0.53, stanceBlend = 0.2, lastHips = nil, snapAt = -1, idleClip = nil, aimClip = "rifle_walk_jump_rleg_land", crouchAimClip = "rifle_walk_jump_rleg_land_over", aimPlaying = nil,
+M4Carbine.overlay = {clip = "rifle_walk_jump_rleg_start", crouchClip = "rifle_walk_jump_rleg_start_over", mountClip = "rifle_run_jump_rleg_land", mountAimClip = "photomode_tracking", mountGridClip = "photomode_victorious_01", mountEyeClip = "photomode_victorious_02", mountGrid = {yaws = 641, pitches = 25, views = 2, noteAfter = 1, downs = 1, down = 0, downStep = 0.6, rolls = 1, rollStep = 4, rollSpan = 0, rollRef = 66, rollSign = 0, roll = 0, yawStep = 0.05, pitchStep = 2.5, yawSpan = 16, pitchSpan = 30, gain = 0, steer = true, steerPole = 0.3, steerRamp = 0.25, hold = 0, aimYaw = -0.05, aimPitch = -0.05, camDrop = -0.05, camYaw = -0.05, camJump = 6, camHoldMax = 2, camHeld = 0, camMove = 0.003, camSettle = 0.3, eye = {pole = 0.3, layer = 13, rows = 801, planes = 9, plane = 4, span = 0.04, step = 0.0001, right = {x = 0.022495, y = 0.997421, z = 0.068151}, up = {x = 0.985039, y = -0.010463, z = -0.172012}}}, mountFix = nil, crouchHips = 0.70, crouchTop = 1.55, standHips = 0.8, crouchWindow = 0.6, crouchDipAt = -1, crouchArmAt = -1, airHips = 0.95, landing = false, landLow = 0, landRise = 0.02, crouchFloor = 0.53, stanceBlend = 0.2, lastHips = nil, snapAt = -1, idleClip = nil, aimClip = "rifle_walk_jump_rleg_land", crouchAimClip = "rifle_walk_jump_rleg_land_over", aimPlaying = nil,
 	standStance = "rifle_walk_jump_lleg_start_over", crouchStance = "rifle_walk_jump_lleg_land_over", stanceSpeed = 0.01, stanceDelay = 0.1, stanceTop = 0.78, stanceBottom = 0.52, stanceWalkTop = 0.75, stanceWalkBottom = 0.66, stillAfter = 0.3, movedAt = -1, stanceSlew = 0.1, shiftRise = 0.35, shiftHold = 0.3, shiftAt = -1, stancePressAt = -1, pressWindow = 1, riseLast = nil, gunFix = 0, gunRef = nil, gunGain = 0.7, gunMax = 15, gunFade = 20, stanceRamp = 0.15, stanceW = 0, stanceSteps = 97, clipKeys = 784, twistMax = 135, twistRate = 2400, twistDead = 1, twistBand = 2, twistWalkDead = 15, twistSettleFrom = 0.6, twistSettleRamp = 0.3, twistFull = false, twist = 0, twistStandW = 0.5, hipsRef = {rifle_walk_jump_lleg_start_over = 64.5, rifle_walk_jump_lleg_start = 64.5, rifle_walk_jump_lleg_land_over = 56.7}, twistStable = 0, hipsLast = nil,
 	gridSteps = 28, gridTurns = 8, gridKeys = 1008, raiseP = 0, gridDir = 0, twistW = 0, twistIn = 0.05, idleBlend = 0.15, gridLive = true, gridAt = -1, gridWait = 0.15, gridFade = 0.08, blank = "blank", layer = 9,
 	drawSeconds = 1.02, drawGrace = 0.1, drawBlend = 0, drawPlateau = 0.6, drawFade = 0.2, drawTailSpeed = 4, drawAimSpeed = 2, drawAimBlend = 0.15, blockHeld = false, aimGuess = false, aimGuessSeconds = 0.6, drawHiddenSpeed = 10, drawSped = false, drawRushed = false, rmb = false, drawRunning = false, drawOwed = false, onUntil = 0, aimHold = 0.05, aimBlend = 0.2, holsterBlend = 0.05, raiseClip = "rifle_walk_jump_lleg_start", lowerClip = "rifle_walk_jump_lleg_land", lowClip = "photomode_facial_pain", lowGrid = {yawCenter = 0, yawSpan = 90, yawStep = 0.5, yaws = 361, pitchCenter = -10, pitchSpan = 40, pitchStep = 2, pitches = 41, baseYaw = 5.1, basePitch = -1.5, hipsRest = {-0.9022, -0.0318, 0.4302, 0.4281, -0.1889, 0.8838, 0.0532, 0.9815, 0.1841}, trimGain = 0.02, trimMax = 15, trimTurn = 3, trimY = 0, trimP = 0, ease = 0.08, settle = 0.5, lead = 16, y = 0, p = 0}, lowRunClip = "photomode_facial_sad_01", lowSprintClip = "photomode_facial_sad_02", lowRunSpeed = 2.5, lowSprintSpeed = 5.6, lowSlack = 0.5, lowHold = 0.6, lowNext = nil, lowNextAt = 0, lowStrideScale = 0.5, lowBodyLayer = 4, lowGait = nil, lowBlend = 0.3, lowStopBlend = 0.2, lowBrakeBand = {-16, -8}, lowBrakeAfter = 0.02, lowBrakeFor = 0, lowSpeed = nil, lowBraked = false, lowFalling = false, lowFallRate = -1, lowRate = 0, lowStartRate = 5, lowStartTwist = 6, lowStartWait = 0.5, startTurn = nil, startWaited = 0, startFast = false, baseLast = nil, baseRate = nil, baseStepMax = 3, baseRateEase = 0.05, phaseClip = nil, phaseErr = nil, phaseWaited = 0, phaseWait = 0.7, phaseRateTol = 0.25, phaseDelay = 0.03, holdFrom = nil, holdUntil = -1, holdLeft = 0, holdBand = 0.025, strideOwner = nil, strideOff = 0, strideTime = 0, strideJump = 0.02, bodyOff = 0, bodySet = nil, bodyCatch = 1, strideCatch = 0.6, liftLayer = 13, lift = nil, liftMargin = 0.03, liftDrop = 0.05, cover = nil, coverFrames = 2, coverSwap = 0.05, uncoverSeconds = 0.38, lightCoverSeconds = 0.3, lightCoverBy = nil,liftStopAt = nil, liftFreeAt = -1, liftSettle = 0.03, liftUndo = 2, liftUndoMin = 0.15, blankAt = 0, blankFor = 0, recoverMin = 0.05, recoverFrom = 0.5, clipSeconds = 2, raiseSeconds = 0.18, crouchRaiseSeconds = 0.25, raiseHandoff = 0.1, lowerSeconds = 0.45, raiseAt = -1, lowerAt = -1, loaded = false,
@@ -2458,7 +2474,7 @@ end
 -- sat on its height 27 px left of it, so the steering aims aimYaw right (A613).
 function M4Carbine.PlayMountGrid(player)
 	local overlay = M4Carbine.overlay
-	overlay.mountFix = {y = 0, p = 0, a = 0, b = 0, vel = {0, 0, 0, 0}, at = M4Carbine.Now(), r = overlay.mountGrid.roll, row = (overlay.mountGrid.yaws - 1) / 2, rollRow = (overlay.mountGrid.rolls - 1) / 2}
+	overlay.mountFix = {y = 0, p = 0, a = 0, b = 0, vel = {0, 0, 0, 0}, noted = {}, at = M4Carbine.Now(), r = overlay.mountGrid.roll, row = (overlay.mountGrid.yaws - 1) / 2, rollRow = (overlay.mountGrid.rolls - 1) / 2}
 	overlay.aimPlaying = overlay.mountGridClip
 	player:StartAnimation(0, overlay.mountGridClip, overlay.layer, 0, overlay.stanceSpeed, true)
 	player:StartAnimation(0, overlay.mountEyeClip, overlay.mountGrid.eye.layer, 0, overlay.stanceSpeed, true)
@@ -2499,6 +2515,19 @@ local scrubD, scrubF, scrubRear = {x = 0, y = 0, z = 0}, {x = 0, y = 0, z = 0}, 
 local steerM, steerE1, steerE2 = {x = 0, y = 0, z = 0}, {x = 0, y = 0, z = 0}, {x = 0, y = 0, z = 0}
 local camRear, camFront, camLine, camAngles = {x = 0, y = 0, z = 0}, {x = 0, y = 0, z = 0}, {x = 0, y = 0, z = 0}, {x = 0, y = 0, z = 0}
 
+function M4Carbine.MountNote(player, fix, view, yaw, pitch, v)
+	local now = M4Carbine.Now()
+	if fix.view ~= view then fix.view, fix.viewAt = view, now end
+	if fix.noted[view] or now - fix.viewAt < M4Carbine.overlay.mountGrid.noteAfter then return end
+	fix.noted[view] = true
+	local ax, ay, az = M4Carbine.BoneAxes(player, 'Spine4')
+	local bx, by, bz = M4Carbine.BoneAxes(player, 'Head')
+	local neck = math.deg(math.acos(clamp((mountDot(ax, bx) + mountDot(ay, by) + mountDot(az, bz) - 1) / 2, -1, 1)))
+	local c, h = player:GetBoneLocal('Spine4', v), player:GetBoneLocal('Head', v)
+	System.LogAlways(string.format("M4CARBINE mount view=%d miss=%.2f,%.2f cell=%.2f,%.2f eye=%.1f,%.1f neck=%.1f chest=%.3f,%.3f,%.3f head=%.3f,%.3f,%.3f",
+		view, yaw, pitch, fix.y, fix.p, fix.a * 1000, fix.b * 1000, neck, c.x, c.y, c.z, h.x, h.y, h.z))
+end
+
 function M4Carbine.MountScrub(player)
 	local overlay = M4Carbine.overlay
 	local grid, fix = overlay.mountGrid, overlay.mountFix
@@ -2525,8 +2554,10 @@ function M4Carbine.MountScrub(player)
 	fix.r = clamp(fix.r - grid.rollSign * grid.gain * cant, -grid.rollSpan, grid.rollSpan)
 	local rollRow = (fix.r + grid.rollSpan) / grid.rollStep
 	if math.abs(rollRow - fix.rollRow) > 0.5 + grid.hold then fix.rollRow = math.floor(rollRow + 0.5) end
-	local key = ((fix.rollRow * grid.downs + grid.down) * grid.yaws + fix.row) * grid.pitches + (fix.p + grid.pitchSpan) / grid.pitchStep
-	player:SetAnimationTime(0, overlay.layer, key / (grid.rolls * grid.downs * grid.yaws * grid.pitches - 1))
+	local view = M4Carbine.ViewFarFromHead() and 1 or 0
+	M4Carbine.MountNote(player, fix, view, yaw, pitch, v)
+	local key = (((view * grid.rolls + fix.rollRow) * grid.downs + grid.down) * grid.yaws + fix.row) * grid.pitches + (fix.p + grid.pitchSpan) / grid.pitchStep
+	player:SetAnimationTime(0, overlay.layer, key / (grid.views * grid.rolls * grid.downs * grid.yaws * grid.pitches - 1))
 	local eye = grid.eye
 	if overlay.eyeOn then
 		local eyeRow = clamp(math.floor((fix.b + eye.span) / eye.step + 0.5), 0, eye.rows - 1)
@@ -3895,13 +3926,12 @@ function M4Carbine.PoseTick()
 	M4Carbine.AimPoseGuard()
 	pcall(M4Carbine.DrawTap)
 	M4Carbine.ChargeGuard()
-	-- The tuck starts about 0.3 s after the shot, so the round has to go in the
-	-- same frames it lands in, not on the sweep once the burst has landed.
-	if M4Carbine.wall.shotAt >= 0 and M4Carbine.Now() - M4Carbine.wall.shotAt < M4Carbine.spent.afterShot then
-		M4Carbine.SweepSpent(M4Carbine.spent.nearRadius)
-	elseif M4Carbine.wall.shotAt >= 0 and M4Carbine.spent.sweptFor ~= M4Carbine.wall.shotAt then
-		M4Carbine.spent.sweptFor = M4Carbine.wall.shotAt
-		M4Carbine.SweepSpent()
+	local spent = M4Carbine.spent
+	local since = spent.shotAt >= 0 and M4Carbine.Now() - spent.shotAt or -1
+	local due = since >= spent.afterShot and spent.afterShot or since >= spent.settle and spent.settle or nil
+	if due and (spent.sweptFor ~= spent.shotAt or spent.sweptAt < due) then
+		spent.sweptFor, spent.sweptAt = spent.shotAt, due
+		M4Carbine.Try("SweepSpent", M4Carbine.SweepSpent)
 	end
 end
 
@@ -4116,14 +4146,13 @@ end
 -- m4_556 and its ball_broken debris. Both carry an invisible cylinder model
 -- that still collides, so a burst walls off an alley and shoves the weapon
 -- aside. Measured in the running game: deleting them clears the obstruction.
-M4Carbine.spent = {names = {"m4_556", "ball_broken"}, radius = 60, nearRadius = 15,
-	afterShot = 2, sweptFor = -1}
+M4Carbine.spent = {names = {"m4_556", "ball_broken"}, radius = 60, settle = 0.5, afterShot = 2, shotAt = -1, sweptFor = -1, sweptAt = 0}
 
 function M4Carbine.SweepSpent(radius)
 	pcall(function()
 		local here = M4Carbine.Dude():GetWorldPos()
 		local removed = 0
-		for _, entity in pairs(System.GetEntitiesInSphere(here, radius or M4Carbine.spent.radius) or {}) do
+		for _, entity in pairs(System.GetPhysicalEntitiesInBox(here, radius or M4Carbine.spent.radius) or {}) do
 			local name = entity:GetName()
 			for _, spent in ipairs(M4Carbine.spent.names) do
 				if string.find(name, spent, 1, true) then
@@ -4153,7 +4182,22 @@ function M4Carbine.AutoArmTick()
 	pcall(autoArm)
 end
 
-M4Carbine.back = {angles = {x = math.rad(5.3), y = math.rad(-17.1), z = math.rad(-54.5)}, pos = {x = 0.084, y = 0.044, z = 0.028}, entity = nil, dirty = true, reload = true, rescan = 1, scanAt = nil, twinWindow = 10}
+M4Carbine.back = {angles = {x = math.rad(5.3), y = math.rad(-17.1), z = math.rad(-54.5)}, pos = {x = 0.084, y = 0.044, z = 0.028}, attachment = 'weapon_cannon', bone = 'BackSlot_cannon', entity = nil, dirty = true, reload = true, rescan = 1, scanAt = nil, twinWindow = 10, detach = {foot = 0.655946, saddle = 0.866}, lead = 2, settle = 1, veilFrames = 6, burst = 120, gunLines = 40, traceFrames = 8, traceLines = 900}
+M4Carbine.carries = {crossbow = {attachment = 'weapon_crossbow', bone = 'BackSlot_crossbow', pos = {x = -0.28291, y = -0.00533, z = 0.05187}, angles = {x = -1.398500, y = 0.881193, z = -0.351121}}}
+M4Carbine.carry = {cvar = 'm4_back_carry', seen = nil, askAt = nil, every = 1}
+
+function M4Carbine.CarryTick()
+	local carry, now = M4Carbine.carry, M4Carbine.Now()
+	if carry.askAt and math.abs(now - carry.askAt) < carry.every then return end
+	carry.askAt = now
+	local ok, value = pcall(System.GetCVar, carry.cvar)
+	value = ok and value ~= nil and tostring(value) or nil
+	if value == carry.seen then return end
+	carry.seen = value
+	M4Carbine.backCarry = M4Carbine.carries[value]
+	M4Carbine.back.reload = true
+	System.LogAlways("M4CARBINE back carry " .. tostring(value) .. (M4Carbine.backCarry and " on " .. M4Carbine.backCarry.attachment or " on weapon_cannon"))
+end
 
 function M4Carbine.SyncBack()
 	local back = M4Carbine.back
@@ -4164,12 +4208,99 @@ function M4Carbine.SyncBack()
 	for _, id in pairs(M4Carbine.Dude().inventory:GetInventoryTable()) do
 		local item = ItemManager.GetItem(id)
 		if M4Carbine.IsCarbine(item) then
-			owned = id
-			if item.entity ~= 0 then entity = item.entity end
+			if item.entity ~= 0 then entity, owned = item.entity, id elseif not entity then owned = id end
 		end
 	end
 	back.entity, back.item = entity, owned
 	if not entity then back.dirty = true end
+end
+
+function M4Carbine.BackVeil(back, gun, why)
+	if M4Carbine.magModel.entity then return nil end
+	back.veil = {id = gun.id, frame = M4Carbine.frameNo}
+	gun:DrawSlot(0, 0)
+	System.LogAlways(string.format("M4BACK veil %s f=%d", why, M4Carbine.frameNo))
+	return back.veil
+end
+
+function M4Carbine.BackUnveil(back, why)
+	local veil = back.veil
+	back.veil = nil
+	local gun = System.GetEntity(veil.id)
+	if gun and not M4Carbine.magModel.entity then gun:DrawSlot(0, 1) end
+	System.LogAlways(string.format("M4BACK unveil %s f=%d after %d frames", why, M4Carbine.frameNo, M4Carbine.frameNo - veil.frame))
+end
+
+function M4Carbine.BackGun(player, back, gun)
+	local carry, overlay, frame = M4Carbine.backCarry or back, M4Carbine.overlay, M4Carbine.frameNo
+	local at, slot = gun:GetWorldPos(), player:GetBonePos(carry.bone)
+	local unposed = math.abs(at.x - slot.x) + math.abs(at.y - slot.y) + math.abs(at.z - slot.z) < 0.01
+	local fresh = unposed and back.unposedGun ~= gun.id
+	back.unposedGun = unposed and gun.id or nil
+	local time = player:IsAnimationRunning(0, overlay.itemLayer) and player:GetAnimationTime(0, overlay.itemLayer) or nil
+	local was, veil = back.holster, back.veil
+	if was and frame - was.frame ~= 1 then was = nil end
+	local clip = time and (overlay.holstering and M4Carbine.inHand or was and time > was.clip) and time or nil
+	back.holster = clip and {clip = clip, key = was and was.key or M4Carbine.Mounted() and "saddle" or "foot", frame = frame, spent = was and was.spent} or nil
+	if veil and veil.id ~= gun.id then
+		M4Carbine.BackUnveil(back, "another gun")
+		veil = nil
+	end
+	if veil and veil.turned and frame - veil.turned >= back.settle then
+		M4Carbine.BackUnveil(back, "posed")
+		veil = nil
+	elseif veil and frame - (veil.posed or veil.frame) > back.veilFrames then
+		M4Carbine.BackUnveil(back, veil.posed and "no turn" or "no bind")
+		veil = nil
+	end
+	if back.gun ~= gun.id then
+		back.gun = gun.id
+		if back.gunLines > 0 then
+			back.gunLines = back.gunLines - 1
+			System.LogAlways(string.format("M4BACK gun %s f=%d hand=%s bare=%s", tostring(gun:GetName()), frame, tostring(M4Carbine.inHand), tostring(unposed)))
+		end
+		if not M4Carbine.inHand and not veil then veil = M4Carbine.BackVeil(back, gun, "born") end
+	end
+	if clip and was and not was.spent and not veil and not unposed then
+		local detach = back.detach[was.key]
+		if clip < detach and clip + back.lead * (clip - was.clip) >= detach then
+			veil = M4Carbine.BackVeil(back, gun, "holster")
+			back.holster.spent = true
+		end
+	end
+	if fresh and was then
+		System.LogAlways(string.format("M4BACK holster bind %s clip=%.4f knew=%.4f veil=%s f=%d", was.key, was.clip, back.detach[was.key], veil and tostring(frame - veil.frame) or "none", frame))
+		back.detach[was.key] = was.clip
+		back.holster = nil
+	end
+	if back.reload or unposed then
+		back.reload = false
+		if fresh then
+			veil = veil or M4Carbine.BackVeil(back, gun, "bind")
+			if veil then veil.posed = frame end
+		end
+		player:SetAttachmentPos(0, carry.attachment, carry.pos, false)
+		M4Carbine.When(function() return true end, function()
+			player:SetAttachmentAngles(0, carry.attachment, carry.angles, false)
+			if back.veil and back.veil.posed and not back.veil.turned then back.veil.turned = M4Carbine.frameNo end
+		end)
+		System.LogAlways("M4CARBINE back slot set")
+	end
+end
+
+function M4Carbine.BackTrace(player, back, gun)
+	if back.traceLines <= 0 then return end
+	local overlay, frame, off = M4Carbine.overlay, M4Carbine.frameNo, -1
+	if gun then
+		local at, slot = gun:GetWorldPos(), player:GetBonePos((M4Carbine.backCarry or back).bone)
+		off = math.abs(at.x - slot.x) + math.abs(at.y - slot.y) + math.abs(at.z - slot.z)
+	end
+	local clip = player:IsAnimationRunning(0, overlay.itemLayer) and player:GetAnimationTime(0, overlay.itemLayer) or -1
+	local saw = string.format("hand=%s gun=%s bare=%s clip=%s holstering=%s veil=%s", tostring(M4Carbine.inHand), tostring(back.entity), tostring(off >= 0 and off < 0.01), tostring(clip >= 0), tostring(overlay.holstering), tostring(back.veil ~= nil))
+	if saw ~= back.traceSaw then back.traceSaw, back.traceUntil = saw, frame + back.traceFrames end
+	if frame > (back.traceUntil or 0) then return end
+	back.traceLines = back.traceLines - 1
+	System.LogAlways(string.format("M4BACK tick f=%d %s off=%.3f at=%.4f", frame, saw, off, clip))
 end
 
 function M4Carbine.BackFrame(player)
@@ -4178,19 +4309,23 @@ function M4Carbine.BackFrame(player)
 	local entity = item and item.entity ~= 0 and item.entity or nil
 	if entity ~= back.entity then
 		back.entity = entity
+		if not entity then back.dirty, back.lost = true, M4Carbine.frameNo end
 		System.LogAlways("M4CARBINE back entity " .. tostring(entity))
+	end
+	if not back.entity and back.lost and M4Carbine.frameNo - back.lost <= back.burst then
+		back.dirty, back.scanAt = true, nil
+		M4Carbine.SyncBack()
 	end
 	local gun = back.entity and System.GetEntity(back.entity)
 	if gun then back.seenAt = M4Carbine.Now() end
 	pcall(M4Carbine.TwinBack, back)
-	if not gun then return end
-	local at, slot = gun:GetWorldPos(), player:GetBonePos('BackSlot_cannon')
-	if back.reload or math.abs(at.x - slot.x) + math.abs(at.y - slot.y) + math.abs(at.z - slot.z) < 0.01 then
-		back.reload = false
-		player:SetAttachmentPos(0, 'weapon_cannon', back.pos, false)
-		M4Carbine.When(function() return true end, function() player:SetAttachmentAngles(0, 'weapon_cannon', back.angles, false) end)
-		System.LogAlways("M4CARBINE back slot set")
+	if gun then
+		M4Carbine.BackGun(player, back, gun)
+	else
+		back.unposedGun, back.holster, back.gun = nil, nil, nil
+		if back.veil then M4Carbine.BackUnveil(back, "the gun left") end
 	end
+	M4Carbine.Try("BackTrace", M4Carbine.BackTrace, player, back, gun)
 end
 
 function M4Carbine.LayersText(entity)
@@ -4219,8 +4354,9 @@ function M4Carbine.TwinBack(back)
 	end
 	if M4Carbine.inHand or not back.talk or back.twin == key then return end
 	back.twin = key
-	twin:SetAttachmentPos(0, 'weapon_cannon', back.pos, false)
-	M4Carbine.When(function() return true end, function() twin:SetAttachmentAngles(0, 'weapon_cannon', back.angles, false) end)
+	local carry = M4Carbine.backCarry or back
+	twin:SetAttachmentPos(0, carry.attachment, carry.pos, false)
+	M4Carbine.When(function() return true end, function() twin:SetAttachmentAngles(0, carry.attachment, carry.angles, false) end)
 	System.LogAlways("M4CARBINE twin back slot set")
 end
 
@@ -4318,7 +4454,6 @@ function M4Carbine.OverlayReloaded(reason)
 	M4Carbine.selector.drawn = {}
 	M4Carbine.back.dirty, M4Carbine.back.reload, M4Carbine.back.scanAt = true, true, nil
 	M4Carbine.doll.found, M4Carbine.doll.scanAt = nil, nil
-	M4Carbine.props.at = nil
 	M4Carbine.UnparkAmmo()
 	M4Carbine.starter.done, M4Carbine.starter.at = false, nil
 	M4Carbine.stash.done, M4Carbine.stash.at = false, nil

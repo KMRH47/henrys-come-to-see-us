@@ -267,6 +267,10 @@ extern volatile LONG m4_sight_dot;
 void m4_tag_light(int on);
 void m4_pin_signal(int on);
 void m4_hip_console(void *console, const char *name);
+void m4_profile_console(void *console, const char *name);
+void m4_profile_mark(const char *step);
+#define PROFILE_MARK "m4_at_"
+void m4_ammo_console(void *console);
 void m4_pin_ease(void);
 void m4_hit_signal(double lost);
 extern volatile LONG m4_sight_picking;
@@ -474,9 +478,14 @@ static void doll_timer(int on) {
 
 void *m4_console_get(void *console, const char *name) {
     if (GetCurrentThreadId() == m4_main_thread) {
+        if (name && !strncmp(name, PROFILE_MARK, sizeof(PROFILE_MARK) - 1)) {
+            m4_profile_mark(name + sizeof(PROFILE_MARK) - 1);
+            return NULL;
+        }
         if (lua_cvars_open != LUA_CVARS_ALL) lua_cvars_unlock(console);
         m4_qam_console(console);
         m4_selector_console(console, name);
+        m4_ammo_console(console);
         if (!head_cvar) head_register(console);
         if (head_cvar && head_waiting) head_flush();
         if (name && !strcmp(name, ESCAPE_CVAR)) m4_tap_escape();
@@ -496,6 +505,7 @@ void *m4_console_get(void *console, const char *name) {
         if (name && !strcmp(name, PIN_EASE_CVAR)) m4_pin_ease();
         if (name && !strncmp(name, HIT_PREFIX, sizeof(HIT_PREFIX) - 1)) m4_hit_signal(atof(name + sizeof(HIT_PREFIX) - 1));
         m4_hip_console(console, name);
+        m4_profile_console(console, name);
     }
     return console_get(console, name);
 }

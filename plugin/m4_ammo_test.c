@@ -11,6 +11,7 @@ void m4_in_hand(void) {}
 static const char *one_shot;
 void m4_clock_one_shot(const char *name, long volume_percent) { one_shot = name; }
 
+
 #define require(condition) do { if (!(condition)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #condition); exit(1); } } while (0)
 
 void note(const char *text) {
@@ -21,6 +22,20 @@ void m4_frame(void) {}
 void m4_tag_disarm(void) {}
 void m4_tag_draw(int m4) { (void)m4; }
 void m4_tag_drawn(int m4) { (void)m4; }
+
+static char fake_cvar[32];
+static int fake_cvars_made;
+void *m4_string_cvar(void *console, const char *name, const char *start, const char *help) {
+    (void)console; (void)help;
+    require(!strcmp(name, BACK_CARRY_CVAR));
+    fake_cvars_made++;
+    snprintf(fake_cvar, sizeof(fake_cvar), "%s", start);
+    return fake_cvar;
+}
+void m4_cvar_set(void *cvar, const char *text) {
+    require(cvar == fake_cvar);
+    snprintf(fake_cvar, sizeof(fake_cvar), "%s", text);
+}
 
 #define COUNT(list) (sizeof(list) / sizeof((list)[0]))
 
@@ -209,6 +224,7 @@ int main(void) {
     memcpy(record + GUID_OFFSET, M4_AMMO_GUIDS[0], 16);
     *(int *)(record + 0xf0) = 3;
     unsigned char cls[0x100] = {0};
+    *(int *)(cls + ATTACHMENT_SLOT_OFFSET) = 10;
     cls[MASK_OFFSET] = M4_MASK;
     cls[AUTO_LOAD_OFFSET] = 0;
     cls[REQUIRES_COCKING_OFFSET] = 1;
@@ -298,6 +314,23 @@ int main(void) {
     require(cls[LOADING_MOVEMENT_OFFSET] == 5);
     m4_class_flags(0, 0);
     puts("PASS: the M4 holds its own load flags while it is in hand and the class row is handed back on release");
+    require(*(int *)(cls + ATTACHMENT_SLOT_OFFSET) == 10 && !m4_back_crossbow());
+    m4_ammo_console(NULL);
+    require(!fake_cvars_made);
+    m4_ammo_console(game);
+    require(fake_cvars_made == 1 && !strcmp(fake_cvar, BACK_CARRY_CANNON));
+    m4_ammo_console(game);
+    require(fake_cvars_made == 1 && !strcmp(fake_cvar, BACK_CARRY_CANNON));
+    unsigned char taken[0x100] = {0};
+    m4_class = NULL;
+    require(on_weapon_class(record, taken, NULL) == taken);
+    require(*(int *)(taken + ATTACHMENT_SLOT_OFFSET) == BACK_SLOT_CROSSBOW && m4_back_crossbow());
+    require(!strcmp(fake_cvar, BACK_CARRY_CANNON));
+    m4_ammo_console(game);
+    require(fake_cvars_made == 1 && !strcmp(fake_cvar, BACK_CARRY_CROSSBOW));
+    require(*(int *)(cls + ATTACHMENT_SLOT_OFFSET) == 10);
+    m4_class = cls;
+    puts("PASS: a rifle class on its vanilla back slot keeps the cannon carry; one another mod left without a slot takes the crossbow's, and m4_back_carry says so");
     memcpy(record + GUID_OFFSET, SHOT_BALL_GUID, 16);
     *(int *)(record + 0xf0) = 3;
     cls[MASK_OFFSET] = M4_MASK;

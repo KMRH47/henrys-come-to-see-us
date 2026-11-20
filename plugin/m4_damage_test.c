@@ -10,6 +10,9 @@ void m4_tag_draw(int m4) { (void)m4; }
 void m4_tag_drawn(int m4) { (void)m4; }
 void m4_pin_signal(int on) { (void)on; }
 void m4_hip_console(void *console, const char *name) { (void)console; (void)name; }
+void m4_profile_console(void *console, const char *name) { (void)console; (void)name; }
+static char marked_step[64] = "none";
+void m4_profile_mark(const char *step) { snprintf(marked_step, sizeof(marked_step), "%s", step); }
 void m4_pin_ease(void) {}
 void m4_hit_signal(double lost) { (void)lost; }
 void m4_tag_light(int on) { (void)on; }
@@ -103,11 +106,15 @@ static void fake_clear_flags(void *cvar, int flags) {
     require(cvar == &fake_cvar_object && flags == CVAR_CHEAT_FLAGS);
     clear_calls++;
 }
-static void *fake_qam_object, *fake_selector_object;
-static char qam_seen[32], selector_seen[16];
+static void *fake_qam_object, *fake_selector_object, *fake_back_object;
+static char qam_seen[32], selector_seen[16], back_seen[16];
 static void fake_set_string(void *cvar, const char *text) {
     if (cvar == &fake_qam_object) {
         snprintf(qam_seen, sizeof(qam_seen), "%s", text);
+        return;
+    }
+    if (cvar == &fake_back_object) {
+        snprintf(back_seen, sizeof(back_seen), "%s", text);
         return;
     }
     if (cvar == &fake_selector_object) {
@@ -128,6 +135,10 @@ static void *fake_register_string(void *console, const char *name, const char *v
     if (!strcmp(name, SELECTOR_CVAR)) {
         snprintf(selector_seen, sizeof(selector_seen), "%s", value);
         return &fake_selector_object;
+    }
+    if (!strcmp(name, BACK_CARRY_CVAR)) {
+        snprintf(back_seen, sizeof(back_seen), "%s", value);
+        return &fake_back_object;
     }
     require(!strcmp(name, HEAD_CVAR));
     register_calls++;
@@ -152,6 +163,11 @@ __attribute__((naked)) static float armour_bridge(unsigned char *hit, int flag, 
 static void *call_get_cvar(void *console, const char *name) {
     void *(*get)(void *, const char *) = (*(void ***)console)[CONSOLE_GET_CVAR / 8];
     return get(console, name);
+}
+
+static DWORD WINAPI call_mark(LPVOID console) {
+    call_get_cvar(console, "m4_at_Other");
+    return 0;
 }
 
 __attribute__((naked)) static int level_bridge(unsigned char *hit, void *victim) {
@@ -502,6 +518,7 @@ int main(void) {
     fake_cvar_object = cvar_table;
     fake_qam_object = cvar_table;
     fake_selector_object = cvar_table;
+    fake_back_object = cvar_table;
     void **console_global = (void **)(game + CONSOLE_GLOBAL_RVA);
     *console_global = NULL;
     require(!head_watch(game, 0) && strstr(last_line, "never appeared"));
@@ -526,6 +543,15 @@ int main(void) {
     require(clear_calls == 3 && lua_cvars_open == LUA_CVARS_ALL && strstr(last_line, "ca_UseLookIK no longer needs -devmode"));
     require(call_get_cvar(&console_object, "sys_spec") == &fake_cvar_object && get_calls == 8 && clear_calls == 3);
     puts("PASS: the cvars the mod's Lua sets lose their cheat lock on the main thread's console reads, a missing one is retried");
+    int reads_before = get_calls;
+    require(call_get_cvar(&console_object, "m4_at_HoldTick") == NULL && !strcmp(marked_step, "HoldTick"));
+    require(call_get_cvar(&console_object, "m4_at_") == NULL && !strcmp(marked_step, ""));
+    require(get_calls == reads_before);
+    HANDLE marker = CreateThread(NULL, 0, call_mark, &console_object, 0, NULL);
+    require(marker && WaitForSingleObject(marker, 5000) == WAIT_OBJECT_0);
+    CloseHandle(marker);
+    require(!strcmp(marked_step, "") && get_calls == reads_before + 1);
+    puts("PASS: a step mark from the main thread reaches the profiler and never the game's console");
     static const struct { const char *name; unsigned taps; } escapes[] = {{"sys_spec", 0}, {"m4_ui_cancel", 1}, {"m4_ui_cancel_x", 0}, {"m4_ui_cancel", 1}};
     for (size_t e = 0; e < sizeof(escapes) / sizeof(escapes[0]); e++) {
         unsigned before = escape_taps;
@@ -556,6 +582,15 @@ int main(void) {
     }
     get_calls -= sizeof(selector_reads) / sizeof(selector_reads[0]);
     puts("PASS: m4_fire_key carries the selector key's press count to the mod's Lua on the main thread's console reads");
+    require(!strcmp(back_seen, BACK_CARRY_CANNON));
+    back_crossbow = 1;
+    call_get_cvar(&console_object, "sys_spec");
+    require(!strcmp(back_seen, BACK_CARRY_CROSSBOW));
+    back_crossbow = 0;
+    call_get_cvar(&console_object, "sys_spec");
+    require(!strcmp(back_seen, BACK_CARRY_CANNON));
+    get_calls -= 2;
+    puts("PASS: m4_back_carry tells the mod's Lua which back slot the M4 rides on the main thread's console reads");
 
     require(health_bridge(m4_hit_record, head, BUFFS, 18.0f, 242.0f, SMASH) == 18.0f);
     require(set_calls == 1 && !strcmp(cvar_text, "1 12.250 -3.500 100.125"));

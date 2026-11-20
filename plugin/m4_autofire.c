@@ -87,6 +87,8 @@ extern volatile LONG m4_hit_gain;
 extern volatile LONG m4_selector_volume;
 extern volatile LONG m4_sway_move, m4_sway_tilt, m4_sway_lean, m4_sway_look, m4_sway_aim, m4_sway_hz;
 void m4_tag_frame(void);
+DWORD WINAPI profile_hook(LPVOID unused);
+extern volatile LONG m4_profile;
 static FILE *trace;
 
 void note(const char *text) {
@@ -312,7 +314,7 @@ static void apply_setting(const char *name, long value) {
         {"near", &m4_armour_near}, {"far", &m4_armour_far}, {"floor", &m4_armour_floor},
         {"hipright", &m4_hip_right}, {"hipahead", &m4_hip_ahead}, {"hipup", &m4_hip_up}, {"aimdepth", &m4_aim_depth},
         {"hitgain", &m4_hit_gain}, {"pinbody", &m4_pin_body}, {"swaymove", &m4_sway_move}, {"swaytilt", &m4_sway_tilt}, {"swaylean", &m4_sway_lean}, {"swaylook", &m4_sway_look}, {"swayaim", &m4_sway_aim}, {"swayhz", &m4_sway_hz},
-        {"selector", &SELECTOR_KEY}, {"selectorvol", &m4_selector_volume},
+        {"selector", &SELECTOR_KEY}, {"selectorvol", &m4_selector_volume}, {"profile", &m4_profile},
     };
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); ++i)
         if (strcmp(name, table[i].name) == 0) InterlockedExchange(table[i].slot, value);
@@ -679,6 +681,7 @@ static DWORD WINAPI start(LPVOID unused) {
     CreateThread(NULL, 0, precision_hook, NULL, 0, NULL);
     CreateThread(NULL, 0, damage_hook, NULL, 0, NULL);
     CreateThread(NULL, 0, look_hook, NULL, 0, NULL);
+    CreateThread(NULL, 0, profile_hook, NULL, 0, NULL);
     return 0;
 }
 

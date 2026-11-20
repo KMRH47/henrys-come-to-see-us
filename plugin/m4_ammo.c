@@ -13,6 +13,8 @@ void put_jump(unsigned char *from, unsigned char *to, size_t length);
 void put_call(unsigned char *from, unsigned char *to, size_t length);
 void m4_tag_draw(int m4);
 void m4_tag_drawn(int m4);
+void *m4_string_cvar(void *console, const char *name, const char *start, const char *help);
+void m4_cvar_set(void *cvar, const char *text);
 
 #define LOOKUP_RVA 0xc5ed44
 #define LOOKUP_TAIL_RVA 0xc5ed5e
@@ -20,6 +22,12 @@ void m4_tag_drawn(int m4);
 #define LOOKUP_STOLEN 9
 #define MASK_OFFSET 0x98
 #define M4_MASK 0x01
+#define ATTACHMENT_SLOT_OFFSET 0x1c
+#define BACK_SLOT_NONE 0
+#define BACK_SLOT_CROSSBOW 5
+#define BACK_CARRY_CVAR "m4_back_carry"
+#define BACK_CARRY_CANNON "cannon"
+#define BACK_CARRY_CROSSBOW "crossbow"
 #define AUTO_LOAD_OFFSET 0x99
 #define REQUIRES_COCKING_OFFSET 0x9b
 #define LOADING_MOVEMENT_OFFSET 0xe1
@@ -142,6 +150,39 @@ static void announce(unsigned char *record, unsigned char *cls) {
     note(line);
 }
 
+static void *back_cvar;
+static LONG back_registering;
+static int back_crossbow;
+static int back_published = -1;
+
+static void take_back_slot(unsigned char *cls) {
+    int slot = *(int *)(cls + ATTACHMENT_SLOT_OFFSET);
+    char line[128];
+    if (slot != BACK_SLOT_NONE) {
+        snprintf(line, sizeof(line), "back: the rifle class rides attachment slot %d, so the M4 keeps the cannon carry", slot);
+        note(line);
+        return;
+    }
+    *(int *)(cls + ATTACHMENT_SLOT_OFFSET) = BACK_SLOT_CROSSBOW;
+    back_crossbow = 1;
+    snprintf(line, sizeof(line), "back: another mod left the rifle class without an attachment slot, so the M4 takes the crossbow's (%d)",
+             BACK_SLOT_CROSSBOW);
+    note(line);
+}
+
+int m4_back_crossbow(void) {
+    return back_crossbow;
+}
+
+void m4_ammo_console(void *console) {
+    if (!back_cvar && console && !InterlockedCompareExchange(&back_registering, 1, 0))
+        back_cvar = m4_string_cvar(console, BACK_CARRY_CVAR, BACK_CARRY_CANNON,
+                                   "M4 back carry: cannon, or crossbow when another mod holds the rifle's back slot, set by m4_autofire.asi");
+    if (!back_cvar || back_published == back_crossbow) return;
+    back_published = back_crossbow;
+    m4_cvar_set(back_cvar, back_crossbow ? BACK_CARRY_CROSSBOW : BACK_CARRY_CANNON);
+}
+
 // Rewriting the loading-on-the-move byte every frame on foot froze the aim pitch (A600),
 // so the M4 sets it only in the saddle and hands it back once on leaving it.
 void m4_class_flags(int m4, int mounted) {
@@ -213,6 +254,7 @@ static unsigned char *on_weapon_class(unsigned char *record, unsigned char *cls,
             table_mask = cls[MASK_OFFSET];
             for (size_t i = 0; i < sizeof(FLAG_OFFSETS) / sizeof(FLAG_OFFSETS[0]); i++)
                 table_flags[i] = cls[FLAG_OFFSETS[i]];
+            take_back_slot(cls);
             m4_class = cls;
         }
         cls[MASK_OFFSET] = M4_MASK;
