@@ -1,6 +1,6 @@
 <p align="center"><img src="docs/page/banner-36afc6f20fea.png" width="850" alt="Henry&#x27;s Come to See Us!, an M4A1 for Kingdom Come: Deliverance II."><br>
 <img src="docs/page/notice-dfd632801c2b.png" width="850" alt="Version 11, No Aim, No Lamp: Click without aiming. Henry raises the M4 and fires."><br>
-<img src="docs/page/panels-a29e18c41dd0.png" width="850" alt="How to install and remove the mod, what it is compatible with, and the M4A1, 5.56 magazine, red dot sight and iron sights in the game."><br>
+<img src="docs/page/panels-e51dfa1f0866.png" width="850" alt="How to install and remove the mod, what it is compatible with, and the M4A1, 5.56 magazine, red dot sight and iron sights in the game."><br>
 <img src="docs/page/features-9f712d539995.png" width="850" alt="What the M4 does in the game."><br>
 <img src="docs/page/gallery-649b5aef9587.png" width="850" alt="Pictures from the game."><br>
 <img src="docs/page/commands-cb50fb577095.png" width="850" alt="Console commands that give the M4, its ammunition and its sights, and three cheats: no recoil, the magazine size and the damage."><br>
