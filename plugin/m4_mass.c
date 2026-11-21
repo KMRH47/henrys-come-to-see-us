@@ -4,6 +4,8 @@
 #include <string.h>
 
 void note(const char *text);
+unsigned char *m4_at(unsigned char *game, size_t steam);
+int m4_differs(unsigned char *game, size_t steam, const unsigned char *bytes, size_t length);
 double m4_since_shot_ms(void);
 unsigned char *near_page(unsigned char *base);
 unsigned char *emit_jump(unsigned char *at, void *target);
@@ -60,13 +62,13 @@ __attribute__((naked)) static void launch(void) {
 }
 
 static int mass_install(unsigned char *game) {
-    if (memcmp(game + LAUNCH_RVA, LAUNCH_BYTES, sizeof(LAUNCH_BYTES))) {
+    if (m4_differs(game, LAUNCH_RVA, LAUNCH_BYTES, sizeof(LAUNCH_BYTES))) {
         note("mass: launch signature mismatch; M4 rounds keep the arrow mass");
         return 0;
     }
     for (size_t i = 0; i < sizeof(LAUNCH_CALLS) / sizeof(LAUNCH_CALLS[0]); i++) {
-        unsigned char *call = game + LAUNCH_CALLS[i];
-        if (call[0] != 0xe8 || call + 5 + *(INT32 *)(call + 1) != game + LAUNCH_RVA) {
+        unsigned char *call = m4_at(game, LAUNCH_CALLS[i]);
+        if (call[0] != 0xe8 || call + 5 + *(INT32 *)(call + 1) != m4_at(game, LAUNCH_RVA)) {
             note("mass: launch call mismatch; M4 rounds keep the arrow mass");
             return 0;
         }
@@ -76,12 +78,12 @@ static int mass_install(unsigned char *game) {
         note("mass: no nearby page; M4 rounds keep the arrow mass");
         return 0;
     }
-    m4_launch_original = game + LAUNCH_RVA;
-    particle_params = (void *)(game + PARTICLE_PARAMS_RVA);
+    m4_launch_original = m4_at(game, LAUNCH_RVA);
+    particle_params = (void *)(m4_at(game, PARTICLE_PARAMS_RVA));
     emit_jump(entry, (void *)launch);
     FlushInstructionCache(GetCurrentProcess(), entry, 14);
     for (size_t i = 0; i < sizeof(LAUNCH_CALLS) / sizeof(LAUNCH_CALLS[0]); i++)
-        put_call(game + LAUNCH_CALLS[i], entry, 5);
+        put_call(m4_at(game, LAUNCH_CALLS[i]), entry, 5);
     note("mass: M4 rounds launch at 0.01 kg");
     return 1;
 }

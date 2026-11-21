@@ -5,6 +5,8 @@
 #include "m4_weapon.h"
 
 void note(const char *text);
+unsigned char *m4_at(unsigned char *game, size_t steam);
+int m4_differs(unsigned char *game, size_t steam, const unsigned char *bytes, size_t length);
 unsigned char *near_page(unsigned char *base);
 unsigned char *emit_jump(unsigned char *at, void *target);
 void put_call(unsigned char *from, unsigned char *to, size_t length);
@@ -63,9 +65,9 @@ static ULONG_PTR aim_start(unsigned char *expansion) {
 
 static unsigned char draw_yields(unsigned char *self, unsigned char **next) {
     if (yield_original(self, next)) return 1;
-    if (!m4_aim_starting || !*next || *(unsigned char **)*next != draw_game + AIM_ACTION_VTABLE_RVA) return 0;
+    if (!m4_aim_starting || !*next || *(unsigned char **)*next != m4_at(draw_game, AIM_ACTION_VTABLE_RVA)) return 0;
     unsigned char *logic = *(unsigned char **)(self + 0xc8);
-    if (!logic || *(unsigned char **)logic != draw_game + DRAW_LOGIC_VTABLE_RVA) return 0;
+    if (!logic || *(unsigned char **)logic != m4_at(draw_game, DRAW_LOGIC_VTABLE_RVA)) return 0;
     int state = *(int *)(logic + 0x48);
     char line[96];
     snprintf(line, sizeof(line), "draw: M4 aim %s the draw, state %d", state == DRAW_LOGIC_ATTACHED ? "replaced" : "waits for", state);
@@ -75,7 +77,7 @@ static unsigned char draw_yields(unsigned char *self, unsigned char **next) {
 
 static unsigned char air_yields(unsigned char *self, unsigned char **next) {
     if (yield_original(self, next)) return 1;
-    if (!m4_aim_starting || !m4_hip_air() || !*next || *(unsigned char **)*next != draw_game + AIM_ACTION_VTABLE_RVA) return 0;
+    if (!m4_aim_starting || !m4_hip_air() || !*next || *(unsigned char **)*next != m4_at(draw_game, AIM_ACTION_VTABLE_RVA)) return 0;
     if (InterlockedIncrement(&air_lines) <= AIR_LINES) {
         char line[96];
         snprintf(line, sizeof(line), "air: aim replaces action WHGame+0x%zx", (size_t)(*(unsigned char **)self - draw_game));
@@ -86,7 +88,7 @@ static unsigned char air_yields(unsigned char *self, unsigned char **next) {
 
 static unsigned char aim_yields(unsigned char *self, unsigned char **next) {
     unsigned char *wanted = *next ? *(unsigned char **)*next : NULL;
-    if (wanted != draw_game + FALL_ACTION_VTABLE_RVA && wanted != draw_game + LAND_ACTION_VTABLE_RVA) return yield_original(self, next);
+    if (wanted != m4_at(draw_game, FALL_ACTION_VTABLE_RVA) && wanted != m4_at(draw_game, LAND_ACTION_VTABLE_RVA)) return yield_original(self, next);
     unsigned char *owner = *(unsigned char **)(self + 0x58);
     unsigned char *actor = owner ? (*(unsigned char *(**)(unsigned char *))(*(unsigned char **)owner + 0x10))(owner) : NULL;
     if (!m4_actor_holds_m4(actor)) return yield_original(self, next);
@@ -109,31 +111,31 @@ static void set_slot(unsigned char **slot, void *hook) {
 }
 
 static void air_install(unsigned char *game) {
-    if (*(unsigned char **)(game + AIM_YIELD_SLOT_RVA) != game + DRAW_YIELD_RVA) {
+    if (*(unsigned char **)(m4_at(game, AIM_YIELD_SLOT_RVA)) != m4_at(game, DRAW_YIELD_RVA)) {
         note("air: aim slot mismatch; a hip press in the air stays refused");
         return;
     }
     for (size_t i = 0; i < sizeof(AIR_YIELD_SLOTS) / sizeof(AIR_YIELD_SLOTS[0]); i++) {
-        if (*(unsigned char **)(game + AIR_YIELD_SLOTS[i]) != game + DRAW_YIELD_RVA) {
+        if (*(unsigned char **)(m4_at(game, AIR_YIELD_SLOTS[i])) != m4_at(game, DRAW_YIELD_RVA)) {
             note("air: vtable slot mismatch; a hip press in the air stays refused");
             return;
         }
     }
     for (size_t i = 0; i < sizeof(AIR_YIELD_SLOTS) / sizeof(AIR_YIELD_SLOTS[0]); i++)
-        set_slot((unsigned char **)(game + AIR_YIELD_SLOTS[i]), (void *)air_yields);
-    set_slot((unsigned char **)(game + AIM_YIELD_SLOT_RVA), (void *)aim_yields);
+        set_slot((unsigned char **)(m4_at(game, AIR_YIELD_SLOTS[i])), (void *)air_yields);
+    set_slot((unsigned char **)(m4_at(game, AIM_YIELD_SLOT_RVA)), (void *)aim_yields);
     note("air: an M4 aim may replace a jump, fall or land");
 }
 
 static int draw_install(unsigned char *game) {
     for (size_t i = 0; i < sizeof(draw_signatures) / sizeof(draw_signatures[0]); i++) {
-        if (memcmp(game + draw_signatures[i].rva, draw_signatures[i].bytes, draw_signatures[i].length)) {
+        if (m4_differs(game, draw_signatures[i].rva, draw_signatures[i].bytes, draw_signatures[i].length)) {
             note("draw: signature mismatch; no draw hooks installed");
             return 0;
         }
     }
-    unsigned char **slot = (unsigned char **)(game + DRAW_YIELD_SLOT_RVA);
-    if (*slot != game + DRAW_YIELD_RVA) {
+    unsigned char **slot = (unsigned char **)(m4_at(game, DRAW_YIELD_SLOT_RVA));
+    if (*slot != m4_at(game, DRAW_YIELD_RVA)) {
         note("draw: vtable slot mismatch; no draw hooks installed");
         return 0;
     }
@@ -143,14 +145,14 @@ static int draw_install(unsigned char *game) {
         return 0;
     }
     draw_game = game;
-    aim_start_original = (void *)(game + DRAW_AIM_START_RVA);
-    yield_original = (void *)(game + DRAW_YIELD_RVA);
+    aim_start_original = (void *)(m4_at(game, DRAW_AIM_START_RVA));
+    yield_original = (void *)(m4_at(game, DRAW_YIELD_RVA));
     emit_jump(entry, (void *)aim_start);
     FlushInstructionCache(GetCurrentProcess(), entry, 14);
     set_slot(slot, (void *)draw_yields);
     air_install(game);
-    put_jump(game + DRAW_PRESS_JUMP_RVA, entry, 5);
-    put_call(game + DRAW_READY_CALL_RVA, entry, 5);
+    put_jump(m4_at(game, DRAW_PRESS_JUMP_RVA), entry, 5);
+    put_call(m4_at(game, DRAW_READY_CALL_RVA), entry, 5);
     note("draw: M4 aim may replace an attached draw");
     return 1;
 }

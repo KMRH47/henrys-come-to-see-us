@@ -4,6 +4,8 @@
 #include <string.h>
 
 void note(const char *text);
+unsigned char *m4_at(unsigned char *game, size_t steam);
+int m4_differs(unsigned char *game, size_t steam, const unsigned char *bytes, size_t length);
 unsigned char *near_page(unsigned char *base);
 unsigned char *emit_jump(unsigned char *at, void *target);
 void put_call(unsigned char *from, unsigned char *to, size_t length);
@@ -74,8 +76,8 @@ void m4_qam_console(void *console) {
 }
 
 static int qam_install(unsigned char *game) {
-    unsigned char *call = game + QAM_SET_ARRAY_CALL_RVA;
-    if (call[0] != 0xe8 || call + 5 + *(int *)(call + 1) != game + QAM_SET_ARRAY_RVA) {
+    unsigned char *call = m4_at(game, QAM_SET_ARRAY_CALL_RVA);
+    if (call[0] != 0xe8 || call + 5 + *(int *)(call + 1) != m4_at(game, QAM_SET_ARRAY_RVA)) {
         note("qam: signature mismatch; no weapon bar hook installed");
         return 0;
     }
@@ -84,7 +86,7 @@ static int qam_install(unsigned char *game) {
         note("qam: no nearby page; no weapon bar hook installed");
         return 0;
     }
-    qam_set_array_original = (void *)(game + QAM_SET_ARRAY_RVA);
+    qam_set_array_original = (void *)(m4_at(game, QAM_SET_ARRAY_RVA));
     emit_jump(entry, (void *)qam_set_array);
     FlushInstructionCache(GetCurrentProcess(), entry, 14);
     put_call(call, entry, 5);

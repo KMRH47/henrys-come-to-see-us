@@ -4,6 +4,8 @@
 #include <string.h>
 
 void note(const char *text);
+unsigned char *m4_at(unsigned char *game, size_t steam);
+int m4_differs(unsigned char *game, size_t steam, const unsigned char *bytes, size_t length);
 unsigned char *near_page(unsigned char *base);
 unsigned char *emit(unsigned char *at, const void *bytes, size_t length);
 unsigned char *emit_call(unsigned char *at, void *target);
@@ -77,8 +79,8 @@ static int look_skip(void *const *params) {
 }
 
 static int look_install(unsigned char *game) {
-    unsigned char *site = game + LOOK_GATE_RVA;
-    if (memcmp(site, LOOK_GATE_BYTES, sizeof(LOOK_GATE_BYTES))) {
+    unsigned char *site = m4_at(game, LOOK_GATE_RVA);
+    if (m4_differs(game, LOOK_GATE_RVA, LOOK_GATE_BYTES, sizeof(LOOK_GATE_BYTES))) {
         note("look: signature mismatch; no look IK hook installed");
         return 0;
     }

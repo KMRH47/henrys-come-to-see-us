@@ -4,6 +4,8 @@
 #include <string.h>
 
 void note(const char *text);
+unsigned char *m4_at(unsigned char *game, size_t steam);
+int m4_differs(unsigned char *game, size_t steam, const unsigned char *bytes, size_t length);
 int m4_aim_held(void);
 int m4_stance(void);
 unsigned char *near_page(unsigned char *base);
@@ -57,13 +59,13 @@ __attribute__((naked)) static void clamp(void) {
 }
 
 static int pitch_install(unsigned char *game) {
-    if (memcmp(game + PITCH_CLAMP_RVA, PITCH_CLAMP_BYTES, sizeof(PITCH_CLAMP_BYTES))) {
+    if (m4_differs(game, PITCH_CLAMP_RVA, PITCH_CLAMP_BYTES, sizeof(PITCH_CLAMP_BYTES))) {
         note("pitch: clamp signature mismatch; crouched aim keeps the engine limit");
         return 0;
     }
     for (size_t i = 0; i < sizeof(PITCH_CLAMP_CALLS) / sizeof(PITCH_CLAMP_CALLS[0]); i++) {
-        unsigned char *call = game + PITCH_CLAMP_CALLS[i];
-        if (call[0] != 0xe8 || call + 5 + *(INT32 *)(call + 1) != game + PITCH_CLAMP_RVA) {
+        unsigned char *call = m4_at(game, PITCH_CLAMP_CALLS[i]);
+        if (call[0] != 0xe8 || call + 5 + *(INT32 *)(call + 1) != m4_at(game, PITCH_CLAMP_RVA)) {
             note("pitch: clamp call mismatch; crouched aim keeps the engine limit");
             return 0;
         }
@@ -73,11 +75,11 @@ static int pitch_install(unsigned char *game) {
         note("pitch: no nearby page; crouched aim keeps the engine limit");
         return 0;
     }
-    m4_pitch_original = game + PITCH_CLAMP_RVA;
+    m4_pitch_original = m4_at(game, PITCH_CLAMP_RVA);
     emit_jump(entry, (void *)clamp);
     FlushInstructionCache(GetCurrentProcess(), entry, 14);
     for (size_t i = 0; i < sizeof(PITCH_CLAMP_CALLS) / sizeof(PITCH_CLAMP_CALLS[0]); i++)
-        put_call(game + PITCH_CLAMP_CALLS[i], entry, 5);
+        put_call(m4_at(game, PITCH_CLAMP_CALLS[i]), entry, 5);
     note("pitch: crouched aim stops at 47 deg up");
     return 1;
 }

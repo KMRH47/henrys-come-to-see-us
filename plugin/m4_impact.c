@@ -4,6 +4,8 @@
 #include <string.h>
 
 void note(const char *text);
+unsigned char *m4_at(unsigned char *game, size_t steam);
+int m4_differs(unsigned char *game, size_t steam, const unsigned char *bytes, size_t length);
 double m4_since_shot_ms(void);
 
 #define MFX_VTABLE_RVA 0x4056c88
@@ -57,10 +59,10 @@ static unsigned short impact_effect(void *mfx, const char *custom, int surface) 
 }
 
 static int impact_install(unsigned char *game) {
-    void **vtable = (void **)(game + MFX_VTABLE_RVA);
-    if (vtable[MFX_BY_NAME_SLOT] != game + MFX_BY_NAME_RVA || vtable[MFX_BY_CUSTOM_SLOT] != game + MFX_BY_CUSTOM_RVA
-        || memcmp(game + MFX_BY_NAME_RVA, MFX_BY_NAME_BYTES, sizeof(MFX_BY_NAME_BYTES))
-        || memcmp(game + MFX_BY_CUSTOM_RVA, MFX_BY_CUSTOM_BYTES, sizeof(MFX_BY_CUSTOM_BYTES))) {
+    void **vtable = (void **)(m4_at(game, MFX_VTABLE_RVA));
+    if (vtable[MFX_BY_NAME_SLOT] != m4_at(game, MFX_BY_NAME_RVA) || vtable[MFX_BY_CUSTOM_SLOT] != m4_at(game, MFX_BY_CUSTOM_RVA)
+        || m4_differs(game, MFX_BY_NAME_RVA, MFX_BY_NAME_BYTES, sizeof(MFX_BY_NAME_BYTES))
+        || m4_differs(game, MFX_BY_CUSTOM_RVA, MFX_BY_CUSTOM_BYTES, sizeof(MFX_BY_CUSTOM_BYTES))) {
         note("impact: WHGame.dll does not match this build's material effects table; hook not installed");
         return 0;
     }

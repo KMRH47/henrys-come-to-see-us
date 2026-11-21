@@ -4,6 +4,8 @@
 #include <string.h>
 
 void note(const char *text);
+unsigned char *m4_at(unsigned char *game, size_t steam);
+int m4_differs(unsigned char *game, size_t steam, const unsigned char *bytes, size_t length);
 int m4_shot_fired(void);
 void m4_in_hand(void);
 void m4_frame(void);
@@ -113,8 +115,8 @@ static unsigned on_trigger(void *proxy, unsigned trigger) {
 
 static void install(unsigned char *game) {
     char line[160];
-    unsigned char *execute = game + EXECUTE_TRIGGER_RVA;
-    if (memcmp(execute, EXECUTE_TRIGGER_BYTES, sizeof(EXECUTE_TRIGGER_BYTES))) {
+    unsigned char *execute = m4_at(game, EXECUTE_TRIGGER_RVA);
+    if (m4_differs(game, EXECUTE_TRIGGER_RVA, EXECUTE_TRIGGER_BYTES, sizeof(EXECUTE_TRIGGER_BYTES))) {
         note("sound: WHGame.dll does not match this build's ExecuteTrigger; hook not installed");
         return;
     }

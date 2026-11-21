@@ -5,6 +5,8 @@
 #include "m4_weapon.h"
 
 void note(const char *text);
+unsigned char *m4_at(unsigned char *game, size_t steam);
+int m4_differs(unsigned char *game, size_t steam, const unsigned char *bytes, size_t length);
 unsigned char *near_page(unsigned char *base);
 unsigned char *emit_jump(unsigned char *at, void *target);
 void put_call(unsigned char *from, unsigned char *to, size_t length);
@@ -76,7 +78,7 @@ static unsigned char space_blocked(unsigned char *ctrl) {
 
 static int space_install(unsigned char *game) {
     for (size_t i = 0; i < sizeof(space_signatures) / sizeof(space_signatures[0]); i++) {
-        if (memcmp(game + space_signatures[i].rva, space_signatures[i].bytes, space_signatures[i].length)) {
+        if (m4_differs(game, space_signatures[i].rva, space_signatures[i].bytes, space_signatures[i].length)) {
             note("space: signature mismatch; no space hooks installed");
             return 0;
         }
@@ -86,14 +88,14 @@ static int space_install(unsigned char *game) {
         note("space: no nearby page; no space hooks installed");
         return 0;
     }
-    space_original = (void *)(game + SPACE_BLOCKED_RVA);
-    space_expand = (void *)(game + SPACE_EXPANSION_RVA);
-    space_record = (void *)(game + SPACE_ITEM_RECORD_RVA);
+    space_original = (void *)(m4_at(game, SPACE_BLOCKED_RVA));
+    space_expand = (void *)(m4_at(game, SPACE_EXPANSION_RVA));
+    space_record = (void *)(m4_at(game, SPACE_ITEM_RECORD_RVA));
     emit_jump(entry, (void *)space_blocked);
     FlushInstructionCache(GetCurrentProcess(), entry, 14);
-    put_call(game + SPACE_DROP_CALL_RVA, entry, 5);
-    put_call(game + SPACE_PRESS_CALL_RVA, entry, 5);
-    put_call(game + SPACE_REARM_CALL_RVA, entry, 5);
+    put_call(m4_at(game, SPACE_DROP_CALL_RVA), entry, 5);
+    put_call(m4_at(game, SPACE_PRESS_CALL_RVA), entry, 5);
+    put_call(m4_at(game, SPACE_REARM_CALL_RVA), entry, 5);
     note("space: player M4 space test hooks installed");
     return 1;
 }

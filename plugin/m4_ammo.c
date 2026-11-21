@@ -5,6 +5,8 @@
 #include <string.h>
 
 void note(const char *text);
+unsigned char *m4_at(unsigned char *game, size_t steam);
+int m4_differs(unsigned char *game, size_t steam, const unsigned char *bytes, size_t length);
 unsigned char *near_page(unsigned char *base);
 unsigned char *emit(unsigned char *at, const void *bytes, size_t length);
 unsigned char *emit_call(unsigned char *at, void *target);
@@ -122,7 +124,7 @@ static int equipment_type(unsigned char *record) {
     int raw = engine_ammo_type(record);
     if (type != 0 || raw == 0) return type;
     for (size_t i = 0; i < MASK_CHECKS; i++) {
-        if (site != game_base + mask_checks[i].rva + mask_checks[i].call + 5) continue;
+        if (site != m4_at(game_base, mask_checks[i].rva) + mask_checks[i].call + 5) continue;
         if (!(InterlockedOr(&announced, 1 << i) & (1 << i))) {
             char line[96];
             snprintf(line, sizeof(line), "ammo: 5.56 mask check WHGame+0x%zx uses the private type; raw type stays %d",
@@ -234,7 +236,7 @@ static void on_record(unsigned char *record, unsigned char *caller) {
     int m4 = m4_is_weapon_record(record);
     for (size_t i = 0; !m4 && i < RIFLE_RECORDS; i++)
         if (rifle_records[i] == record) { m4 = -1; break; }
-    if (m4 && caller == game_base + PRESS_LOOKUP_RVA) m4_tag_draw(m4 > 0);
+    if (m4 && caller == m4_at(game_base, PRESS_LOOKUP_RVA)) m4_tag_draw(m4 > 0);
 }
 
 static const unsigned char RECORD_HOOK_ENTER[] = {0x51, 0x52, 0x41, 0x50, 0x41, 0x51, 0x48, 0x8b, 0x54, 0x24, 0x20, 0x48, 0x83, 0xec, 0x28};
@@ -246,7 +248,7 @@ static unsigned char *on_weapon_class(unsigned char *record, unsigned char *cls,
     if (m4_class && (m4 || cls == m4_class)) {
         if (!m4) remember_rifle(record);
         trace_draw(record, caller, m4);
-        if (caller == game_base + DRAW_LOOKUP_RVA) m4_tag_drawn(m4);
+        if (caller == m4_at(game_base, DRAW_LOOKUP_RVA)) m4_tag_drawn(m4);
     }
     if (m4_is_weapon_record(record)) {
         if (!m4_class) {
@@ -266,23 +268,23 @@ static unsigned char *on_weapon_class(unsigned char *record, unsigned char *cls,
 
 static void install(unsigned char *game) {
     char line[160];
-    unsigned char *lookup = game + LOOKUP_RVA, *tail = game + LOOKUP_TAIL_RVA;
-    void *record_class = game + RECORD_CLASS_RVA, *resume = lookup + LOOKUP_STOLEN, *rule = (void *)on_weapon_class;
-    if (memcmp(lookup, LOOKUP_BYTES, sizeof(LOOKUP_BYTES)) || memcmp(tail, TAIL_BYTES, sizeof(TAIL_BYTES)) ||
-        memcmp(record_class, RECORD_CLASS_BYTES, sizeof(RECORD_CLASS_BYTES)) ||
-        memcmp(game + AMMO_TYPE_RVA, AMMO_TYPE_BYTES, sizeof(AMMO_TYPE_BYTES)) ||
-        memcmp(game + EQUIP_MATCH_RVA, EQUIP_MATCH_BYTES, sizeof(EQUIP_MATCH_BYTES))) {
+    unsigned char *lookup = m4_at(game, LOOKUP_RVA), *tail = m4_at(game, LOOKUP_TAIL_RVA);
+    void *record_class = m4_at(game, RECORD_CLASS_RVA), *resume = lookup + LOOKUP_STOLEN, *rule = (void *)on_weapon_class;
+    if (m4_differs(game, LOOKUP_RVA, LOOKUP_BYTES, sizeof(LOOKUP_BYTES)) || m4_differs(game, LOOKUP_TAIL_RVA, TAIL_BYTES, sizeof(TAIL_BYTES)) ||
+        m4_differs(game, RECORD_CLASS_RVA, RECORD_CLASS_BYTES, sizeof(RECORD_CLASS_BYTES)) ||
+        m4_differs(game, AMMO_TYPE_RVA, AMMO_TYPE_BYTES, sizeof(AMMO_TYPE_BYTES)) ||
+        m4_differs(game, EQUIP_MATCH_RVA, EQUIP_MATCH_BYTES, sizeof(EQUIP_MATCH_BYTES))) {
         note("ammo: WHGame.dll does not match this build's class lookup; hook not installed");
         return;
     }
     for (size_t i = 0; i < sizeof(loading_calls) / sizeof(loading_calls[0]); i++) {
-        if (memcmp(game + loading_calls[i].rva, loading_calls[i].bytes, loading_calls[i].length)) {
+        if (m4_differs(game, loading_calls[i].rva, loading_calls[i].bytes, loading_calls[i].length)) {
             note("ammo: loading call signature mismatch; no ammo hooks installed");
             return;
         }
     }
     for (size_t i = 0; i < MASK_CHECKS; i++) {
-        if (memcmp(game + mask_checks[i].rva, mask_checks[i].bytes, mask_checks[i].length)) {
+        if (m4_differs(game, mask_checks[i].rva, mask_checks[i].bytes, mask_checks[i].length)) {
             note("ammo: mask check signature mismatch; no ammo hooks installed");
             return;
         }
@@ -298,15 +300,15 @@ static void install(unsigned char *game) {
     at = emit(exit, LOAD_RULE_ARGS, sizeof(LOAD_RULE_ARGS));
     at = emit_call(at, rule);
     at = emit(at, TAIL_BYTES, sizeof(TAIL_BYTES));
-    engine_ammo_type = (void *)(game + AMMO_TYPE_RVA);
+    engine_ammo_type = (void *)(m4_at(game, AMMO_TYPE_RVA));
     game_base = game;
     unsigned char *equip = emit_jump(at, (void *)loading_type);
     const unsigned char record_arg[] = {0x48, 0x8b, 0xc8};
     emit_jump(emit(equip, record_arg, sizeof(record_arg)), (void *)equipment_type);
     for (size_t i = 0; i < MASK_CHECKS; i++)
-        put_call(game + mask_checks[i].rva + mask_checks[i].call, equip, mask_checks[i].span);
+        put_call(m4_at(game, mask_checks[i].rva) + mask_checks[i].call, equip, mask_checks[i].span);
     for (size_t i = 0; i < sizeof(loading_calls) / sizeof(loading_calls[0]); i++)
-        put_call(game + loading_calls[i].rva, at, 5);
+        put_call(m4_at(game, loading_calls[i].rva), at, 5);
     put_jump(tail, exit, sizeof(TAIL_BYTES));
     put_jump(lookup, entry, LOOKUP_STOLEN);
     unsigned char *probe = near_page(game);

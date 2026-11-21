@@ -4,6 +4,8 @@
 #include <string.h>
 
 void note(const char *text);
+unsigned char *m4_at(unsigned char *game, size_t steam);
+int m4_differs(unsigned char *game, size_t steam, const unsigned char *bytes, size_t length);
 unsigned char *near_page(unsigned char *base);
 unsigned char *emit_jump(unsigned char *at, void *target);
 void put_call(unsigned char *from, unsigned char *to, size_t length);
@@ -73,8 +75,8 @@ static int sight_target(void *inventory, void *item) {
 }
 
 static int sight_calls(unsigned char *game, unsigned int call_rva, unsigned int target_rva) {
-    unsigned char *call = game + call_rva;
-    return call[0] == 0xe8 && call + 5 + *(int *)(call + 1) == game + target_rva;
+    unsigned char *call = m4_at(game, call_rva);
+    return call[0] == 0xe8 && call + 5 + *(int *)(call + 1) == m4_at(game, target_rva);
 }
 
 static int sight_redirect(unsigned char *game, const unsigned int *calls, size_t count, void *hook) {
@@ -82,18 +84,18 @@ static int sight_redirect(unsigned char *game, const unsigned int *calls, size_t
     if (!entry) return 0;
     emit_jump(entry, hook);
     FlushInstructionCache(GetCurrentProcess(), entry, 14);
-    for (size_t i = 0; i < count; i++) put_call(game + calls[i], entry, 5);
+    for (size_t i = 0; i < count; i++) put_call(m4_at(game, calls[i]), entry, 5);
     return 1;
 }
 
 static void sight_install(unsigned char *game) {
     static const unsigned int category_calls[] = {SIGHT_LIST_CALL_RVA, SIGHT_INFO_CALL_RVA};
-    sight_record = (void *)(game + SIGHT_ITEM_RECORD_RVA);
-    if (memcmp(game + SIGHT_CATEGORY_RVA, SIGHT_CATEGORY_BYTES, sizeof(SIGHT_CATEGORY_BYTES)) ||
+    sight_record = (void *)(m4_at(game, SIGHT_ITEM_RECORD_RVA));
+    if (m4_differs(game, SIGHT_CATEGORY_RVA, SIGHT_CATEGORY_BYTES, sizeof(SIGHT_CATEGORY_BYTES)) ||
         !sight_calls(game, SIGHT_LIST_CALL_RVA, SIGHT_CATEGORY_RVA) || !sight_calls(game, SIGHT_INFO_CALL_RVA, SIGHT_CATEGORY_RVA)) {
         note("sight: tab signature mismatch; the sights stay in their vanilla tab");
     } else {
-        sight_category_original = (void *)(game + SIGHT_CATEGORY_RVA);
+        sight_category_original = (void *)(m4_at(game, SIGHT_CATEGORY_RVA));
         note(sight_redirect(game, category_calls, 2, (void *)sight_category)
              ? "sight: the red dot and iron sights list under Weapons" : "sight: no nearby page; the sights stay in their vanilla tab");
     }
@@ -101,13 +103,13 @@ static void sight_install(unsigned char *game) {
     if (!sight_calls(game, SIGHT_TARGET_CALL_RVA, SIGHT_TARGET_RVA)) {
         note("sight: target check signature mismatch; Apply on a sight needs a poisonable weapon");
     } else {
-        sight_target_original = (void *)(game + SIGHT_TARGET_RVA);
+        sight_target_original = (void *)(m4_at(game, SIGHT_TARGET_RVA));
         note(sight_redirect(game, target_calls, 1, (void *)sight_target)
              ? "sight: Apply on a sight never asks for a poisonable weapon" : "sight: no nearby page; Apply on a sight needs a poisonable weapon");
     }
-    unsigned char *jump = game + SIGHT_USE_JUMP_RVA, *entry;
-    if (memcmp(game + SIGHT_USE_RVA, SIGHT_USE_BYTES, sizeof(SIGHT_USE_BYTES)) ||
-        jump[0] != 0xe9 || jump + 5 + *(int *)(jump + 1) != game + SIGHT_USE_RVA) {
+    unsigned char *jump = m4_at(game, SIGHT_USE_JUMP_RVA), *entry;
+    if (m4_differs(game, SIGHT_USE_RVA, SIGHT_USE_BYTES, sizeof(SIGHT_USE_BYTES)) ||
+        jump[0] != 0xe9 || jump + 5 + *(int *)(jump + 1) != m4_at(game, SIGHT_USE_RVA)) {
         note("sight: use signature mismatch; applying a sight shows the poison dialog first");
         return;
     }
@@ -115,7 +117,7 @@ static void sight_install(unsigned char *game) {
         note("sight: no nearby page; applying a sight shows the poison dialog first");
         return;
     }
-    sight_use_original = (void *)(game + SIGHT_USE_RVA);
+    sight_use_original = (void *)(m4_at(game, SIGHT_USE_RVA));
     emit_jump(entry, (void *)sight_use);
     FlushInstructionCache(GetCurrentProcess(), entry, 14);
     put_jump(jump, entry, 5);

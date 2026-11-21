@@ -4,6 +4,8 @@
 #include <string.h>
 
 void note(const char *text);
+unsigned char *m4_at(unsigned char *game, size_t steam);
+int m4_differs(unsigned char *game, size_t steam, const unsigned char *bytes, size_t length);
 unsigned char *near_page(unsigned char *base);
 unsigned char *emit(unsigned char *at, const void *bytes, size_t length);
 unsigned char *emit_jump(unsigned char *at, void *target);
@@ -134,7 +136,7 @@ static unsigned char *events_emit_node_stub(unsigned char *at, void *target) {
 
 static int events_install(unsigned char *game) {
     for (size_t i = 0; i < sizeof(events_signatures) / sizeof(events_signatures[0]); i++) {
-        if (memcmp(game + events_signatures[i].rva, events_signatures[i].bytes, events_signatures[i].length)) {
+        if (m4_differs(game, events_signatures[i].rva, events_signatures[i].bytes, events_signatures[i].length)) {
             note("events: signature mismatch; no events hooks installed");
             return 0;
         }
@@ -145,13 +147,13 @@ static int events_install(unsigned char *game) {
         return 0;
     }
     InitializeCriticalSection(&events_lock);
-    events_original = (void *)(game + EVENTS_LOADER_RVA);
+    events_original = (void *)(m4_at(game, EVENTS_LOADER_RVA));
     unsigned char *stub = emit_jump(entry, (void *)events_load);
     stub = (unsigned char *)(((ULONG_PTR)stub + 15) & ~(ULONG_PTR)15);
     events_emit_node_stub(stub, (void *)events_node);
     FlushInstructionCache(GetCurrentProcess(), entry, (size_t)(stub - entry) + 64);
-    put_call(game + EVENTS_NODE_RVA + EVENTS_NODE_OFFSET, stub, 5);
-    put_call(game + EVENTS_CALL_RVA + EVENTS_CALL_OFFSET, entry, 5);
+    put_call(m4_at(game, EVENTS_NODE_RVA) + EVENTS_NODE_OFFSET, stub, 5);
+    put_call(m4_at(game, EVENTS_CALL_RVA) + EVENTS_CALL_OFFSET, entry, 5);
     note("events: male events merge hooks installed");
     return 1;
 }

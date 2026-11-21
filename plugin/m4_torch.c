@@ -4,6 +4,8 @@
 #include "m4_weapon.h"
 
 void note(const char *text);
+unsigned char *m4_at(unsigned char *game, size_t steam);
+int m4_differs(unsigned char *game, size_t steam, const unsigned char *bytes, size_t length);
 unsigned char *near_page(unsigned char *base);
 unsigned char *emit_jump(unsigned char *at, void *target);
 void put_jump(unsigned char *from, unsigned char *to, size_t length);
@@ -39,8 +41,8 @@ static void torch_toggle(unsigned char *self) {
 }
 
 static int torch_install(unsigned char *game) {
-    if (memcmp(game + TORCH_INVOKE_JUMP_RVA - 4, TORCH_INVOKE_BYTES, sizeof(TORCH_INVOKE_BYTES)) ||
-        memcmp(game + TORCH_TOGGLE_RVA, TORCH_TOGGLE_BYTES, sizeof(TORCH_TOGGLE_BYTES))) {
+    if (m4_differs(game, TORCH_INVOKE_JUMP_RVA - 4, TORCH_INVOKE_BYTES, sizeof(TORCH_INVOKE_BYTES)) ||
+        m4_differs(game, TORCH_TOGGLE_RVA, TORCH_TOGGLE_BYTES, sizeof(TORCH_TOGGLE_BYTES))) {
         note("torch: signature mismatch; no torch hook installed");
         return 0;
     }
@@ -49,11 +51,11 @@ static int torch_install(unsigned char *game) {
         note("torch: no nearby page; no torch hook installed");
         return 0;
     }
-    torch_original = (void *)(game + TORCH_TOGGLE_RVA);
-    torch_expand = (void *)(game + TORCH_EXPANSION_RVA);
+    torch_original = (void *)(m4_at(game, TORCH_TOGGLE_RVA));
+    torch_expand = (void *)(m4_at(game, TORCH_EXPANSION_RVA));
     emit_jump(entry, (void *)torch_toggle);
     FlushInstructionCache(GetCurrentProcess(), entry, 14);
-    put_jump(game + TORCH_INVOKE_JUMP_RVA, entry, 5);
+    put_jump(m4_at(game, TORCH_INVOKE_JUMP_RVA), entry, 5);
     note("torch: M4 torch key hook installed");
     return 1;
 }

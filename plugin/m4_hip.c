@@ -5,6 +5,8 @@
 #include <string.h>
 
 void note(const char *text);
+unsigned char *m4_at(unsigned char *game, size_t steam);
+int m4_differs(unsigned char *game, size_t steam, const unsigned char *bytes, size_t length);
 double m4_since_shot_ms(void);
 int m4_hip_held(void);
 int m4_hip_state(void);
@@ -113,19 +115,19 @@ __attribute__((naked)) static void launch_entry(void) {
 }
 
 static int hip_install(unsigned char *game) {
-    if (memcmp(game + LAUNCH_ENTRY_RVA, LAUNCH_ENTRY_BYTES, sizeof(LAUNCH_ENTRY_BYTES))) {
+    if (m4_differs(game, LAUNCH_ENTRY_RVA, LAUNCH_ENTRY_BYTES, sizeof(LAUNCH_ENTRY_BYTES))) {
         note("hip: launch signature mismatch; hip rounds leave along the raw gun");
         return 0;
     }
     for (size_t i = 0; i < sizeof(LAUNCH_SLOTS) / sizeof(LAUNCH_SLOTS[0]); i++) {
-        if (*(unsigned char **)(game + LAUNCH_SLOTS[i]) != game + LAUNCH_ENTRY_RVA) {
+        if (*(unsigned char **)(m4_at(game, LAUNCH_SLOTS[i])) != m4_at(game, LAUNCH_ENTRY_RVA)) {
             note("hip: launch vtable mismatch; hip rounds leave along the raw gun");
             return 0;
         }
     }
-    m4_launch_entry_original = game + LAUNCH_ENTRY_RVA;
+    m4_launch_entry_original = m4_at(game, LAUNCH_ENTRY_RVA);
     for (size_t i = 0; i < sizeof(LAUNCH_SLOTS) / sizeof(LAUNCH_SLOTS[0]); i++) {
-        void **slot = (void **)(game + LAUNCH_SLOTS[i]);
+        void **slot = (void **)(m4_at(game, LAUNCH_SLOTS[i]));
         DWORD old;
         VirtualProtect(slot, sizeof(*slot), PAGE_READWRITE, &old);
         *slot = (void *)launch_entry;

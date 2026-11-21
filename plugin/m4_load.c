@@ -4,6 +4,8 @@
 #include "m4_weapon.h"
 
 void note(const char *text);
+unsigned char *m4_at(unsigned char *game, size_t steam);
+int m4_differs(unsigned char *game, size_t steam, const unsigned char *bytes, size_t length);
 unsigned char *near_page(unsigned char *base);
 unsigned char *emit_jump(unsigned char *at, void *target);
 void put_call(unsigned char *from, unsigned char *to, size_t length);
@@ -30,8 +32,8 @@ static unsigned char load_allowed(unsigned char *expansion) {
 }
 
 static int load_install(unsigned char *game) {
-    if (memcmp(game + LOAD_CHECK_CALL_RVA, LOAD_CHECK_CALL_BYTES, sizeof(LOAD_CHECK_CALL_BYTES)) ||
-        memcmp(game + LOAD_CHECK_RVA, LOAD_CHECK_BYTES, sizeof(LOAD_CHECK_BYTES))) {
+    if (m4_differs(game, LOAD_CHECK_CALL_RVA, LOAD_CHECK_CALL_BYTES, sizeof(LOAD_CHECK_CALL_BYTES)) ||
+        m4_differs(game, LOAD_CHECK_RVA, LOAD_CHECK_BYTES, sizeof(LOAD_CHECK_BYTES))) {
         note("load: signature mismatch; no load hook installed");
         return 0;
     }
@@ -40,10 +42,10 @@ static int load_install(unsigned char *game) {
         note("load: no nearby page; no load hook installed");
         return 0;
     }
-    load_original = (void *)(game + LOAD_CHECK_RVA);
+    load_original = (void *)(m4_at(game, LOAD_CHECK_RVA));
     emit_jump(entry, (void *)load_allowed);
     FlushInstructionCache(GetCurrentProcess(), entry, 14);
-    put_call(game + LOAD_CHECK_CALL_RVA, entry, 5);
+    put_call(m4_at(game, LOAD_CHECK_CALL_RVA), entry, 5);
     note("load: M4 recharge check hook installed");
     return 1;
 }

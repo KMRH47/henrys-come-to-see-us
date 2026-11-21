@@ -5,6 +5,8 @@
 #include <math.h>
 
 void note(const char *text);
+unsigned char *m4_at(unsigned char *game, size_t steam);
+int m4_differs(unsigned char *game, size_t steam, const unsigned char *bytes, size_t length);
 unsigned char *near_page(unsigned char *base);
 unsigned char *emit(unsigned char *at, const void *bytes, size_t length);
 unsigned char *emit_call(unsigned char *at, void *target);
@@ -2130,7 +2132,7 @@ static unsigned char *stub(unsigned char *at, const unsigned char *replayed, siz
 
 static int precision_install(unsigned char *game) {
     for (size_t i = 0; i < sizeof(precision_signatures) / sizeof(precision_signatures[0]); i++) {
-        if (memcmp(game + precision_signatures[i].rva, precision_signatures[i].bytes, precision_signatures[i].length)) {
+        if (m4_differs(game, precision_signatures[i].rva, precision_signatures[i].bytes, precision_signatures[i].length)) {
             note("precision: signature mismatch; no precision hooks installed");
             return 0;
         }
@@ -2143,29 +2145,29 @@ static int precision_install(unsigned char *game) {
     unsigned char *camera = page;
     unsigned char *camera_bone = stub(camera, NULL, 0, CAMERA_ARGS_RSP_30_40_4C, sizeof(CAMERA_ARGS_RSP_30_40_4C), (void *)camera_add,
                                       CAMERA_LOOP_EXIT_STATE, sizeof(CAMERA_LOOP_EXIT_STATE),
-                                      game + CAMERA_ADD_RVA + ADD_LOOP_LENGTH);
+                                      m4_at(game, CAMERA_ADD_RVA) + ADD_LOOP_LENGTH);
     unsigned char *attachment = stub(camera_bone, NULL, 0, CAMERA_ARGS_RSP_30_40_4C, sizeof(CAMERA_ARGS_RSP_30_40_4C), (void *)camera_add,
                                      CAMERA_LOOP_EXIT_STATE, sizeof(CAMERA_LOOP_EXIT_STATE),
-                                     game + CAMERA_BONE_ADD_RVA + ADD_LOOP_LENGTH);
+                                     m4_at(game, CAMERA_BONE_ADD_RVA) + ADD_LOOP_LENGTH);
     unsigned char *drawn = stub(attachment, NULL, 0, ATTACHMENT_ARGS_RBP_69_41_5D, sizeof(ATTACHMENT_ARGS_RBP_69_41_5D),
                                  (void *)attachment_add, ATTACHMENT_LOOP_EXIT_STATE, sizeof(ATTACHMENT_LOOP_EXIT_STATE),
-                                 game + ATTACHMENT_ADD_RVA + ADD_LOOP_LENGTH);
+                                 m4_at(game, ATTACHMENT_ADD_RVA) + ADD_LOOP_LENGTH);
     unsigned char *part = stub(drawn, SLOT_DRAWN_BYTES, SLOT_DRAWN_LENGTH, DRAWN_ARGS_MATRIX_RBP_38_SLOT_RSI_PASS_R13_ENTITY_RBP_108,
                                sizeof(DRAWN_ARGS_MATRIX_RBP_38_SLOT_RSI_PASS_R13_ENTITY_RBP_108), (void *)slot_drawn, NULL, 0,
-                               game + SLOT_DRAWN_RVA + SLOT_DRAWN_LENGTH);
+                               m4_at(game, SLOT_DRAWN_RVA) + SLOT_DRAWN_LENGTH);
     unsigned char *skinned = stub(part, PART_DRAWN_BYTES, PART_DRAWN_LENGTH, PART_ARGS_SLOT_RSI_DRAW_R14_ENTITY_RBP_108_SPARE_RBP_38,
                                   sizeof(PART_ARGS_SLOT_RSI_DRAW_R14_ENTITY_RBP_108_SPARE_RBP_38), (void *)part_drawn, NULL, 0,
-                                  game + PART_DRAWN_RVA + PART_DRAWN_LENGTH);
+                                  m4_at(game, PART_DRAWN_RVA) + PART_DRAWN_LENGTH);
     unsigned char *end = emit_jump(emit(skinned, SKINNING_ARGS_CONTEXT_RCX_DATA_RDI, sizeof(SKINNING_ARGS_CONTEXT_RCX_DATA_RDI)),
                                    (void *)skinning_computed);
-    skinning_computation = (void (*)(unsigned char *))(game + SKINNING_COMPUTATION_RVA);
+    skinning_computation = (void (*)(unsigned char *))(m4_at(game, SKINNING_COMPUTATION_RVA));
     FlushInstructionCache(GetCurrentProcess(), page, end - page);
-    put_jump(game + CAMERA_ADD_RVA, camera, ADD_LOOP_LENGTH);
-    put_jump(game + CAMERA_BONE_ADD_RVA, camera_bone, ADD_LOOP_LENGTH);
-    put_jump(game + ATTACHMENT_ADD_RVA, attachment, ADD_LOOP_LENGTH);
-    put_jump(game + SLOT_DRAWN_RVA, drawn, SLOT_DRAWN_LENGTH);
-    put_jump(game + PART_DRAWN_RVA, part, PART_DRAWN_LENGTH);
-    put_call(game + SKINNING_CALL_RVA, skinned, SKINNING_CALL_LENGTH);
+    put_jump(m4_at(game, CAMERA_ADD_RVA), camera, ADD_LOOP_LENGTH);
+    put_jump(m4_at(game, CAMERA_BONE_ADD_RVA), camera_bone, ADD_LOOP_LENGTH);
+    put_jump(m4_at(game, ATTACHMENT_ADD_RVA), attachment, ADD_LOOP_LENGTH);
+    put_jump(m4_at(game, SLOT_DRAWN_RVA), drawn, SLOT_DRAWN_LENGTH);
+    put_jump(m4_at(game, PART_DRAWN_RVA), part, PART_DRAWN_LENGTH);
+    put_call(m4_at(game, SKINNING_CALL_RVA), skinned, SKINNING_CALL_LENGTH);
     note("precision: camera, attachment, slot draw, part draw and skinning hooks installed");
     return 1;
 }
@@ -2356,12 +2358,12 @@ static void flush_pin_rows(void) {
 
 static void pin_check(unsigned char *game) {
     static const unsigned char PATH_BYTES[] = {0x48, 0x8b, 0x81, 0x38, 0x0a, 0x00, 0x00, 0xc3};
-    void **character = (void **)(game + CHARACTER_VTABLE_RVA), **skeleton = (void **)(game + SKELETON_VTABLE_RVA);
+    void **character = (void **)(m4_at(game, CHARACTER_VTABLE_RVA)), **skeleton = (void **)(m4_at(game, SKELETON_VTABLE_RVA));
     pin_character_vtable = character;
-    pin_parent_fn = game + SKELETON_PARENT_RVA;
-    pin_name_fn = game + SKELETON_NAME_RVA;
-    pin_bind_fn = game + SKELETON_BIND_RVA;
-    int ok = character[CHARACTER_PATH_SLOT] == game + CHARACTER_PATH_RVA && !memcmp(game + CHARACTER_PATH_RVA, PATH_BYTES, sizeof(PATH_BYTES)) &&
+    pin_parent_fn = m4_at(game, SKELETON_PARENT_RVA);
+    pin_name_fn = m4_at(game, SKELETON_NAME_RVA);
+    pin_bind_fn = m4_at(game, SKELETON_BIND_RVA);
+    int ok = character[CHARACTER_PATH_SLOT] == m4_at(game, CHARACTER_PATH_RVA) && !m4_differs(game, CHARACTER_PATH_RVA, PATH_BYTES, sizeof(PATH_BYTES)) &&
              skeleton[SKELETON_PARENT_SLOT] == pin_parent_fn && skeleton[SKELETON_NAME_SLOT] == pin_name_fn;
     InterlockedExchange(&pin_ready, ok);
     note(ok ? "pin: character and skeleton tables match, the pin can run" : "pin: character or skeleton table mismatch, the pin stays off");

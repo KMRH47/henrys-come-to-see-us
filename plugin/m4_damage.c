@@ -7,6 +7,8 @@
 #include "m4_weapon.h"
 
 void note(const char *text);
+unsigned char *m4_at(unsigned char *game, size_t steam);
+int m4_differs(unsigned char *game, size_t steam, const unsigned char *bytes, size_t length);
 unsigned char *near_page(unsigned char *base);
 unsigned char *emit_jump(unsigned char *at, void *target);
 void put_jump(unsigned char *from, unsigned char *to, size_t length);
@@ -384,7 +386,7 @@ void *m4_string_cvar(void *console, const char *name, const char *start, const c
     void *(*register_string)(void *, const char *, const char *, int, const char *, void *) = table[CONSOLE_REGISTER_STRING / 8];
     void *cvar = register_string(console, name, start, 0, help, NULL);
     char line[128];
-    if (cvar && *(unsigned char **)cvar == damage_game + STRING_CVAR_VTABLE_RVA) {
+    if (cvar && *(unsigned char **)cvar == m4_at(damage_game, STRING_CVAR_VTABLE_RVA)) {
         snprintf(line, sizeof(line), "console: variable %s created as \"%s\"", name, start);
         note(line);
         return cvar;
@@ -433,8 +435,8 @@ static void lua_cvars_unlock(void *console) {
 }
 
 static int console_execute(const char *line, int silent, int deferred) {
-    void *console = damage_game ? *(void *volatile *)(damage_game + CONSOLE_GLOBAL_RVA) : NULL;
-    if (!console || *(unsigned char **)console != damage_game + CONSOLE_VTABLE_RVA) return 0;
+    void *console = damage_game ? *(void *volatile *)(m4_at(damage_game, CONSOLE_GLOBAL_RVA)) : NULL;
+    if (!console || *(unsigned char **)console != m4_at(damage_game, CONSOLE_VTABLE_RVA)) return 0;
     void (*execute)(void *, const char *, int, int) = (*(void ***)console)[CONSOLE_EXECUTE_STRING / 8];
     execute(console, line, silent, deferred);
     return 1;
@@ -658,7 +660,7 @@ static int damage_signatures(unsigned char *game) {
         {ENTITY_RVA, ENTITY_BYTES, sizeof(ENTITY_BYTES)}, {CONSOLE_USE_RVA, CONSOLE_USE_BYTES, sizeof(CONSOLE_USE_BYTES)},
     };
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++)
-        if (memcmp(game + table[i].rva, table[i].bytes, table[i].size)) return 0;
+        if (m4_differs(game, table[i].rva, table[i].bytes, table[i].size)) return 0;
     return 1;
 }
 
@@ -673,15 +675,15 @@ static int damage_install(unsigned char *game) {
         return 0;
     }
     damage_game = game;
-    damage_record = (void *)(game + ITEM_RECORD_RVA);
-    damage_item = (void *)(game + HIT_ITEM_RVA);
-    damage_level = (void *)(game + LEVEL_RVA);
-    damage_scale = (void *)(game + SCALE_RVA);
-    damage_modify = (void *)(game + MODIFY_RVA);
-    damage_distance = (void *)(game + DISTANCE_RVA);
-    damage_entity = (void *)(game + ENTITY_RVA);
-    m4_attack_resume = game + ATTACK_TAIL_RVA + ATTACK_TAIL_STOLEN;
-    m4_buff_original = game + BUFF_RVA;
+    damage_record = (void *)(m4_at(game, ITEM_RECORD_RVA));
+    damage_item = (void *)(m4_at(game, HIT_ITEM_RVA));
+    damage_level = (void *)(m4_at(game, LEVEL_RVA));
+    damage_scale = (void *)(m4_at(game, SCALE_RVA));
+    damage_modify = (void *)(m4_at(game, MODIFY_RVA));
+    damage_distance = (void *)(m4_at(game, DISTANCE_RVA));
+    damage_entity = (void *)(m4_at(game, ENTITY_RVA));
+    m4_attack_resume = m4_at(game, ATTACK_TAIL_RVA) + ATTACK_TAIL_STOLEN;
+    m4_buff_original = m4_at(game, BUFF_RVA);
     unsigned char *unaware = emit_jump(entry, (void *)attack_tail);
     unsigned char *level = emit_jump(unaware, (void *)unaware_bonus);
     unsigned char *buff = emit_jump(level, (void *)level_check);
@@ -689,12 +691,12 @@ static int damage_install(unsigned char *game) {
     unsigned char *armour = emit_jump(health, (void *)health_buff);
     unsigned char *end = emit_jump(armour, (void *)armour_attack);
     FlushInstructionCache(GetCurrentProcess(), entry, end - entry);
-    put_call(game + UNAWARE_CALL_RVA, unaware, 5);
-    put_call(game + LEVEL_CALL_RVA, level, 5);
-    put_call(game + ATTACK_BUFF_CALL_RVA, buff, 5);
-    put_call(game + HEALTH_BUFF_CALL_RVA, health, 5);
-    put_call(game + MODIFY_CALL_RVA, armour, 5);
-    put_jump(game + ATTACK_TAIL_RVA, entry, ATTACK_TAIL_STOLEN);
+    put_call(m4_at(game, UNAWARE_CALL_RVA), unaware, 5);
+    put_call(m4_at(game, LEVEL_CALL_RVA), level, 5);
+    put_call(m4_at(game, ATTACK_BUFF_CALL_RVA), buff, 5);
+    put_call(m4_at(game, HEALTH_BUFF_CALL_RVA), health, 5);
+    put_call(m4_at(game, MODIFY_CALL_RVA), armour, 5);
+    put_jump(m4_at(game, ATTACK_TAIL_RVA), entry, ATTACK_TAIL_STOLEN);
     char line[224];
     snprintf(line, sizeof(line),
              "damage: M4 attack fixed at %.2f; armour loses punch from %ld m to %ld%% at %ld m; victim combat level, victim health buffs and attacker damage buffs skipped",
@@ -724,11 +726,11 @@ static DWORD first_thread(void) {
 }
 
 static int head_watch(unsigned char *game, DWORD wait_ms) {
-    void *volatile *global = (void *volatile *)(game + CONSOLE_GLOBAL_RVA);
+    void *volatile *global = (void *volatile *)(m4_at(game, CONSOLE_GLOBAL_RVA));
     void *console = NULL;
     for (DWORD waited = 0;; waited += 5) {
         console = *global;
-        if (console && *(unsigned char **)console == game + CONSOLE_VTABLE_RVA) break;
+        if (console && *(unsigned char **)console == m4_at(game, CONSOLE_VTABLE_RVA)) break;
         if (waited >= wait_ms) {
             note("damage: the game console never appeared; m4_head_hit is not created");
             return 0;
@@ -736,7 +738,7 @@ static int head_watch(unsigned char *game, DWORD wait_ms) {
         Sleep(5);
     }
     if (!m4_main_thread) m4_main_thread = first_thread();
-    console_slot = (void **)(game + CONSOLE_VTABLE_RVA) + CONSOLE_GET_CVAR / 8;
+    console_slot = (void **)(m4_at(game, CONSOLE_VTABLE_RVA)) + CONSOLE_GET_CVAR / 8;
     console_get = *console_slot;
     if (!m4_main_thread || !vtable_write(console_slot, (void *)m4_console_get)) {
         note("damage: no main thread or a locked console table; m4_head_hit is not created");

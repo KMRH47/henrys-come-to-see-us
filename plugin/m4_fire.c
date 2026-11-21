@@ -5,6 +5,8 @@
 #include "m4_weapon.h"
 
 void note(const char *text);
+unsigned char *m4_at(unsigned char *game, size_t steam);
+int m4_differs(unsigned char *game, size_t steam, const unsigned char *bytes, size_t length);
 unsigned char *near_page(unsigned char *base);
 unsigned char *emit_jump(unsigned char *at, void *target);
 void put_call(unsigned char *from, unsigned char *to, size_t length);
@@ -51,11 +53,11 @@ static unsigned char *m4_state(unsigned char *expansion) {
 }
 
 static int charged_early(unsigned char *state) {
-    return state && *(unsigned char **)state == fire_game + INSTANT_CHARGING_VTABLE_RVA && !state[0x98] && state[0x99];
+    return state && *(unsigned char **)state == m4_at(fire_game, INSTANT_CHARGING_VTABLE_RVA) && !state[0x98] && state[0x99];
 }
 
 static int charge_missed(unsigned char *state) {
-    return *(unsigned char **)state == fire_game + INSTANT_CHARGING_VTABLE_RVA && !state[0x98] && !state[0x99] &&
+    return *(unsigned char **)state == m4_at(fire_game, INSTANT_CHARGING_VTABLE_RVA) && !state[0x98] && !state[0x99] &&
            m4_since_shot_ms() >= m4_period_ms();
 }
 
@@ -111,14 +113,14 @@ static void charged(unsigned char *state) {
 }
 
 static int fire_install(unsigned char *game) {
-    if (memcmp(game + FIRE_CAN_CALL_RVA, FIRE_CAN_CALL_BYTES, sizeof(FIRE_CAN_CALL_BYTES)) ||
-        memcmp(game + FIRE_CAN_RVA, FIRE_CAN_BYTES, sizeof(FIRE_CAN_BYTES)) ||
-        memcmp(game + FIRE_START_CALL_RVA, FIRE_START_CALL_BYTES, sizeof(FIRE_START_CALL_BYTES)) ||
-        memcmp(game + FIRE_START_RVA, FIRE_START_BYTES, sizeof(FIRE_START_BYTES)) ||
-        memcmp(game + SHOOT_RVA, SHOOT_BYTES, sizeof(SHOOT_BYTES)) ||
-        memcmp(game + CHARGED_RVA, CHARGED_BYTES, sizeof(CHARGED_BYTES)) ||
-        memcmp(game + CHARGED_CALL_RVA, CHARGED_CALL_BYTES, sizeof(CHARGED_CALL_BYTES)) ||
-        memcmp(game + CHARGED_JUMP_RVA, CHARGED_JUMP_BYTES, sizeof(CHARGED_JUMP_BYTES))) {
+    if (m4_differs(game, FIRE_CAN_CALL_RVA, FIRE_CAN_CALL_BYTES, sizeof(FIRE_CAN_CALL_BYTES)) ||
+        m4_differs(game, FIRE_CAN_RVA, FIRE_CAN_BYTES, sizeof(FIRE_CAN_BYTES)) ||
+        m4_differs(game, FIRE_START_CALL_RVA, FIRE_START_CALL_BYTES, sizeof(FIRE_START_CALL_BYTES)) ||
+        m4_differs(game, FIRE_START_RVA, FIRE_START_BYTES, sizeof(FIRE_START_BYTES)) ||
+        m4_differs(game, SHOOT_RVA, SHOOT_BYTES, sizeof(SHOOT_BYTES)) ||
+        m4_differs(game, CHARGED_RVA, CHARGED_BYTES, sizeof(CHARGED_BYTES)) ||
+        m4_differs(game, CHARGED_CALL_RVA, CHARGED_CALL_BYTES, sizeof(CHARGED_CALL_BYTES)) ||
+        m4_differs(game, CHARGED_JUMP_RVA, CHARGED_JUMP_BYTES, sizeof(CHARGED_JUMP_BYTES))) {
         note("fire: signature mismatch; no fire hooks installed");
         return 0;
     }
@@ -128,19 +130,19 @@ static int fire_install(unsigned char *game) {
         return 0;
     }
     fire_game = game;
-    can_fire_original = (void *)(game + FIRE_CAN_RVA);
-    fire_start_original = (void *)(game + FIRE_START_RVA);
-    shoot = (void *)(game + SHOOT_RVA);
-    charged_original = (void *)(game + CHARGED_RVA);
-    expansion_of = (void *)(game + EXPANSION_RVA);
+    can_fire_original = (void *)(m4_at(game, FIRE_CAN_RVA));
+    fire_start_original = (void *)(m4_at(game, FIRE_START_RVA));
+    shoot = (void *)(m4_at(game, SHOOT_RVA));
+    charged_original = (void *)(m4_at(game, CHARGED_RVA));
+    expansion_of = (void *)(m4_at(game, EXPANSION_RVA));
     emit_jump(entry, (void *)can_fire);
     emit_jump(entry + 16, (void *)fire_start);
     emit_jump(entry + 32, (void *)charged);
     FlushInstructionCache(GetCurrentProcess(), entry, 46);
-    put_call(game + FIRE_CAN_CALL_RVA, entry, 5);
-    put_call(game + FIRE_START_CALL_RVA, entry + 16, 5);
-    put_call(game + CHARGED_CALL_RVA, entry + 32, 5);
-    put_jump(game + CHARGED_JUMP_RVA, entry + 32, 5);
+    put_call(m4_at(game, FIRE_CAN_CALL_RVA), entry, 5);
+    put_call(m4_at(game, FIRE_START_CALL_RVA), entry + 16, 5);
+    put_call(m4_at(game, CHARGED_CALL_RVA), entry + 32, 5);
+    put_jump(m4_at(game, CHARGED_JUMP_RVA), entry + 32, 5);
     note("fire: an M4 press may fire once the per-shot charge is charged, and presses wait for it");
     return 1;
 }

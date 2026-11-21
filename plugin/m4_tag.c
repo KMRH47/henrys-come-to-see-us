@@ -4,6 +4,8 @@
 #include <string.h>
 
 void note(const char *text);
+unsigned char *m4_at(unsigned char *game, size_t steam);
+int m4_differs(unsigned char *game, size_t steam, const unsigned char *bytes, size_t length);
 unsigned char *near_page(unsigned char *base);
 unsigned char *emit_jump(unsigned char *at, void *target);
 void put_jump(unsigned char *from, unsigned char *to, size_t length);
@@ -166,17 +168,17 @@ static void resolve_male_def(void *def) {
         return;
     }
     probed[probed_count++] = def;
-    int id = ((get_tag_id_fn)(game + GET_TAG_ID_RVA))(def, "m4a1");
+    int id = ((get_tag_id_fn)(m4_at(game, GET_TAG_ID_RVA)))(def, "m4a1");
     if (id < 0) return;
     m4a1_id = id;
-    m4aim_id = ((get_tag_id_fn)(game + GET_TAG_ID_RVA))(def, "m4aim");
-    charge_id = ((get_tag_id_fn)(game + GET_TAG_ID_RVA))(def, "charge");
-    stealth_id = ((get_tag_id_fn)(game + GET_TAG_ID_RVA))(def, "stealth");
-    horse_id = ((get_tag_id_fn)(game + GET_TAG_ID_RVA))(def, "horse");
-    m4hold_id = ((get_tag_id_fn)(game + GET_TAG_ID_RVA))(def, "m4hold");
-    m4next_id = ((get_tag_id_fn)(game + GET_TAG_ID_RVA))(def, "m4next");
-    m4light_id = ((get_tag_id_fn)(game + GET_TAG_ID_RVA))(def, "m4light");
-    m4hip_id = ((get_tag_id_fn)(game + GET_TAG_ID_RVA))(def, "m4hip");
+    m4aim_id = ((get_tag_id_fn)(m4_at(game, GET_TAG_ID_RVA)))(def, "m4aim");
+    charge_id = ((get_tag_id_fn)(m4_at(game, GET_TAG_ID_RVA)))(def, "charge");
+    stealth_id = ((get_tag_id_fn)(m4_at(game, GET_TAG_ID_RVA)))(def, "stealth");
+    horse_id = ((get_tag_id_fn)(m4_at(game, GET_TAG_ID_RVA)))(def, "horse");
+    m4hold_id = ((get_tag_id_fn)(m4_at(game, GET_TAG_ID_RVA)))(def, "m4hold");
+    m4next_id = ((get_tag_id_fn)(m4_at(game, GET_TAG_ID_RVA)))(def, "m4next");
+    m4light_id = ((get_tag_id_fn)(m4_at(game, GET_TAG_ID_RVA)))(def, "m4light");
+    m4hip_id = ((get_tag_id_fn)(m4_at(game, GET_TAG_ID_RVA)))(def, "m4hip");
     male_def = def;
     char line[224];
     snprintf(line, sizeof(line), "tag: m4a1 id %d, m4aim id %ld, m4hold id %ld, m4light id %ld, m4hip id %ld, charge id %ld, stealth id %ld, horse id %ld on def %p; injection live",
@@ -378,8 +380,8 @@ DWORD WINAPI tag_hook(LPVOID unused) {
     HMODULE module;
     while (!(module = GetModuleHandleA("WHGame.dll"))) Sleep(1);
     game = (unsigned char *)module;
-    unsigned char *site = game + SET_TAG_RVA;
-    if (memcmp(site, SET_TAG_BYTES, sizeof(SET_TAG_BYTES))) {
+    unsigned char *site = m4_at(game, SET_TAG_RVA);
+    if (m4_differs(game, SET_TAG_RVA, SET_TAG_BYTES, sizeof(SET_TAG_BYTES))) {
         note("tag: WHGame.dll does not match this build's SetTag; probe not installed");
         return 0;
     }
