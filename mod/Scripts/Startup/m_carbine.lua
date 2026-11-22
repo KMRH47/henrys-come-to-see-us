@@ -3986,7 +3986,7 @@ function M4Carbine.CheatsLoad()
 	M4Carbine.FireModeSend()
 end
 
-M4Carbine.fireMode = {saved = "m4_fire_single", cvar = "m4_fire_key", seen = nil, showFor = 1000, gap = 1, switched = nil}
+M4Carbine.fireMode = {saved = "m4_fire_single", cvar = "m4_fire_key", key = "h", command = "m4_selector_key", bound = false, seen = nil, showFor = 1000, gap = 1, switched = nil}
 
 function M4Carbine.FireSingle()
 	local ok, single = pcall(Variables.GetGlobal, M4Carbine.fireMode.saved)
@@ -4015,21 +4015,41 @@ function M4Carbine.FireMode(mode, extra)
 	M4Carbine.FireModeSet(wanted)
 end
 
+function M4Carbine.SelectorPress()
+	local fire = M4Carbine.fireMode
+	local now = System.GetCurrTime()
+	if M4Carbine.inHand ~= true or (fire.switched and now >= fire.switched and now - fire.switched < fire.gap) then return end
+	fire.switched = now
+	M4Carbine.FireModeSet(not M4Carbine.FireSingle())
+	if not M4Carbine.SelectorSwitchStart(M4Carbine.FireSingle()) then
+		M4Carbine.MarkTrigger("c_f_m4a1_selector", "selector click")
+	end
+end
+
+function M4Carbine.SelectorKey()
+	System.LogAlways("M4CARBINE selector key bind")
+	M4Carbine.SelectorPress()
+end
+
+function M4Carbine.SelectorBind()
+	local fire = M4Carbine.fireMode
+	local held = M4Carbine.inHand == true
+	if held and not fire.bound then
+		local line = "bind " .. fire.key .. " " .. fire.command
+		System.LogAlways("M4CARBINE selector " .. line .. " " .. tostring(pcall(System.ExecuteCommand, line)))
+	end
+	fire.bound = held
+end
+
 function M4Carbine.FireModeTick()
 	local fire = M4Carbine.fireMode
+	M4Carbine.SelectorBind()
 	local ok, value = pcall(System.GetCVar, fire.cvar)
 	local presses = ok and tonumber(value) or nil
 	if not presses or presses == fire.seen then return end
 	local fresh = fire.seen ~= nil
 	fire.seen = presses
-	local now = System.GetCurrTime()
-	if fresh and M4Carbine.inHand == true and not (fire.switched and now >= fire.switched and now - fire.switched < fire.gap) then
-		fire.switched = now
-		M4Carbine.FireModeSet(not M4Carbine.FireSingle())
-		if not M4Carbine.SelectorSwitchStart(M4Carbine.FireSingle()) then
-			M4Carbine.MarkTrigger("c_f_m4a1_selector", "selector click")
-		end
-	end
+	if fresh then M4Carbine.SelectorPress() end
 end
 
 function M4Carbine.CheatSaid(message)
@@ -4082,6 +4102,7 @@ function M4Carbine.RegisterCommands()
 	System.AddCCommand("m4_mag_size", "M4Carbine.MagSize(%%)", "m4_mag_size 1-10000: rounds one M4 magazine holds, 30 by default")
 	System.AddCCommand("m4_damage", "M4Carbine.Damage(%%)", "m4_damage 1-1000: percent of the M4's normal damage, 100 by default")
 	System.AddCCommand("m4_fire_mode", "M4Carbine.FireMode(%%)", "m4_fire_mode single|auto|toggle: the M4 fires one round per trigger press, or full auto while held")
+	System.AddCCommand("m4_selector_key", "M4Carbine.SelectorKey()", "the fire selector key runs this through the game's own key bind")
 	System.AddCCommand("m4_sight_apply", "M4Carbine.SightApply(%%)", "m4_sight_apply dot|irons: the plugin runs this when a sight is used")
 	System.AddCCommand("m4_doll_tick", "M4Carbine.DollTimer()", "the plugin runs this while the inventory doll is shown")
 end
