@@ -14,6 +14,7 @@ void m4_profile_console(void *console, const char *name) { (void)console; (void)
 static char marked_step[64] = "none";
 void m4_profile_mark(const char *step) { snprintf(marked_step, sizeof(marked_step), "%s", step); }
 void m4_pin_ease(void) {}
+int m4_pin_can_hold(void) { return 1; }
 void m4_hit_signal(double lost) { (void)lost; }
 void m4_tag_light(int on) { (void)on; }
 static unsigned escape_taps;
@@ -159,6 +160,19 @@ __attribute__((naked)) static float armour_bridge(unsigned char *hit, int flag, 
         "call armour_attack\n"
         "add $0x28, %rsp\n pop %r15\n pop %rdi\n ret\n");
 }
+
+static unsigned execute_calls;
+static int execute_reenter;
+static char executed_line[64];
+static void fake_execute(void *console, const char *line, int silent, int deferred) {
+    (void)console; (void)silent; (void)deferred;
+    execute_calls++;
+    snprintf(executed_line, sizeof(executed_line), "%s", line);
+    if (execute_reenter) doll_tick(doll_pump_top);
+}
+
+static int test_in_front;
+static int fake_in_front(void) { return test_in_front; }
 
 static void *call_get_cvar(void *console, const char *name) {
     void *(*get)(void *, const char *) = (*(void ***)console)[CONSOLE_GET_CVAR / 8];
@@ -574,6 +588,40 @@ int main(void) {
     }
     get_calls -= sizeof(picks) / sizeof(picks[0]);
     puts("PASS: a read of m4_sight_pick arms the picker's M4 swallow, other names never do");
+    static const struct { const char *signal; int timer; unsigned vk; int down; int front; int swallowed; LONG key; } routes[] = {
+        {NULL, 1, 'W', 1, 1, 0, 0},
+        {"m4_sight_keys_on", 1, 'W', 1, 1, 1, 1},
+        {NULL, 1, 'W', 0, 1, 1, 0},
+        {NULL, 1, VK_UP, 1, 1, 1, 1},
+        {NULL, 1, VK_DOWN, 1, 1, 1, 2},
+        {NULL, 1, 'S', 1, 1, 1, 2},
+        {NULL, 1, 'A', 1, 1, 0, 0},
+        {NULL, 1, 'S', 1, 0, 0, 0},
+        {NULL, 0, 'S', 1, 1, 0, 0},
+        {NULL, 1, 'E', 1, 1, 1, 3},
+        {NULL, 1, 'E', 1, 1, 1, 0},
+        {NULL, 1, 'E', 0, 1, 1, 0},
+        {NULL, 1, VK_RETURN, 1, 1, 1, 3},
+        {NULL, 1, VK_RETURN, 0, 1, 1, 0},
+        {"m4_sight_keys_off", 1, 'W', 1, 1, 0, 0},
+        {"m4_sight_keys_on", 1, 'S', 1, 1, 1, 2},
+        {"m4_doll_stop", 1, 'S', 1, 1, 0, 0},
+    };
+    unsigned route_reads = 0;
+    for (size_t r = 0; r < sizeof(routes) / sizeof(routes[0]); r++) {
+        if (routes[r].signal) {
+            call_get_cvar(&console_object, routes[r].signal);
+            route_reads++;
+        }
+        doll_timer_on = routes[r].timer;
+        test_in_front = routes[r].front;
+        InterlockedExchange(&sight_key, 0);
+        require(m4_sight_key_route(routes[r].vk, routes[r].down, fake_in_front) == routes[r].swallowed);
+        require(sight_key == routes[r].key);
+    }
+    doll_timer_on = 0;
+    get_calls -= route_reads;
+    puts("PASS: while the M4 picker is open over the doll, W and Up queue focus prev, S and Down focus next, a fresh E or Enter a pick, and nothing else is taken");
     static const struct { LONG presses; const char *text; } selector_reads[] = {{0, "0"}, {1, "1"}, {0, "1"}, {2, "3"}};
     for (size_t k = 0; k < sizeof(selector_reads) / sizeof(selector_reads[0]); k++) {
         for (LONG p = 0; p < selector_reads[k].presses; p++) InterlockedIncrement(&m4_selector_presses);
@@ -654,6 +702,36 @@ int main(void) {
     require(health_bridge(m4_hit_record, head, BUFFS, 18.0f, 242.0f, SMASH) == 18.0f);
     require(lines == seen && set_calls == 4 && !strcmp(cvar_text, "4 1.000 0.000 0.000"));
     puts("PASS: past the line cap M4 hits stay fixed, head hits still publish, and nothing logs");
+
+    console_table[CONSOLE_EXECUTE_STRING / 8] = (void *)fake_execute;
+    static const struct { uintptr_t frame; int reenter; unsigned runs; } ticks[] = {
+        {0x100000, 0, 0}, {0x100000, 0, 0}, {0x100000, 0, 0}, {0x0fe000, 0, 0}, {0x100000, 0, 0},
+        {0x100000, 0, 0}, {0x100000, 0, 0}, {0x100000, 0, 0}, {0x100000, 0, 0}, {0x100000, 0, 0},
+        {0x100000, 0, 1},
+        {0x0fe000, 0, 0},
+        {0x0ffc00, 0, 1},
+        {0x0ffbff, 0, 0},
+        {0x100200, 0, 1},
+        {0x0ffdf0, 0, 0},
+        {0x100200, 1, 1},
+    };
+    for (unsigned t = 0; t < sizeof(ticks) / sizeof(ticks[0]); t++) {
+        unsigned before = execute_calls;
+        execute_reenter = ticks[t].reenter;
+        doll_tick(ticks[t].frame);
+        require(execute_calls - before == ticks[t].runs && !doll_running);
+    }
+    require(!strcmp(executed_line, DOLL_LINE) && doll_skip_noted && strstr(last_line, "doll: skipped a timer tick"));
+    puts("PASS: the doll line runs only from the main loop's message pump, never from a deeper pump or inside itself");
+    static const struct { LONG key; unsigned runs; const char *line; } keyed[] = {{2, 2, "m4_sight_key 2"}, {0, 1, DOLL_LINE}, {3, 2, "m4_sight_key 3"}};
+    for (unsigned k = 0; k < sizeof(keyed) / sizeof(keyed[0]); k++) {
+        unsigned before = execute_calls;
+        execute_reenter = 0;
+        InterlockedExchange(&sight_key, keyed[k].key);
+        doll_tick(doll_pump_top);
+        require(execute_calls - before == keyed[k].runs && !strcmp(executed_line, keyed[k].line) && sight_key == 0);
+    }
+    puts("PASS: a queued picker key runs as m4_sight_key after the doll line on the same main-thread tick");
 
     static const struct { int states[8]; const char *text; } bars[] = {
         {{3, 2, 0, 0, 0, 0, 0, 0}, "1 0"},

@@ -23,6 +23,8 @@ void note(const char *text);
 #define REVERB_DECAY 0
 #define INDOOR_WET_DB -40.0f
 #define CRACK_MS 250
+#define TAIL_BEATS 4
+#define TAIL_FADE_MS 200
 #define ECHO_FADE_MS 600
 
 typedef struct {
@@ -250,6 +252,13 @@ static void play_at(unsigned long long start) {
     }
     fmod.volume(channel, volume / 100.0f);
     fmod.paused(channel, 0);
+    int old = (beats - TAIL_BEATS) % PENDING;
+    if (beats >= TAIL_BEATS && pending[old].channel && pending[old].beat == beats - TAIL_BEATS) {
+        unsigned long long gone = start + (unsigned long long)fmod.rate * TAIL_FADE_MS / 1000;
+        fmod.add_fade(pending[old].channel, start, 1.0f);
+        fmod.add_fade(pending[old].channel, gone, 0.0f);
+        fmod.delay(pending[old].channel, pending[old].start, gone, 1);
+    }
     pending[beats % PENDING].channel = channel;
     pending[beats % PENDING].start = start;
     pending[beats % PENDING].beat = beats;

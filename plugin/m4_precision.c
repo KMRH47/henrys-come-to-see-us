@@ -1,3 +1,4 @@
+#define SIGHT_TRACE_REPORTS 40
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <stdio.h>
@@ -200,12 +201,23 @@ typedef struct {
 #define PIN_LEVEL_HAND 10
 #define PIN_LEVEL_RIGHT 3
 #define PIN_LEVEL_LEFT_HAND 13
+#define PIN_LEVEL_CHEST 7
 #define ARM_MIN_M 0.1
 #define ARM_MAX_M 0.6
 #define ARM_REACH_MARGIN_M 0.001
 #define ARM_BENT 1e-3
-#define PIN_ARM_SEEN 6
+#define PIN_ARM_SEEN 14
 #define ARM_STRETCH_M 0.03
+#define HOLD_TRUST_DEG 12.0
+#define HOLD_DOUBT_DEG 20.0
+#define HOLD_TRUST_DEG_S 300.0
+#define HOLD_DOUBT_DEG_S 600.0
+#define HOLD_BACK_S 0.15
+#define HOLD_GAP_S 0.25
+#define HOLD_FRAME_S 0.01
+#define HOLD_AIM_S 0.5
+#define HOLD_GONE_DEG 0.01
+#define HOLD_GONE_M 0.0001
 #define PIN_BODY_TAU_S 0.15
 #define PIN_ARM_PULL 0.7f
 #define PIN_ELBOW_PULL 0.6f
@@ -280,15 +292,25 @@ typedef struct {
     void *skeleton;
     UINT32 joints;
     int ok, arms;
+    const char *why;
+    char root[32];
     unsigned char level[MAX_SHIFTED_JOINTS], arm_root[2];
-    short arm_joint[2][3];
+    short arm_joint[2][3], chest_joint;
     double arm_bind[2][3][3];
 } pin_table;
 
 typedef struct {
     double at[2][3][3];
-    float left_hand[8], held[8], hold;
+    float left_hand[8], held[8], hold, chest[8];
+    int chested;
 } arm_pose;
+
+typedef struct {
+    LONG frame;
+    double at, aim_at, follow, ease, pole[2][3], pole_off[2][3];
+    float carry[8], seen[8], chest[8], chest_off[8], hand[8], hand_off[8];
+    int doubt, aimed, chest_ok, arms_ok, arms_due;
+} arm_hold;
 
 typedef struct {
     volatile LONG seq, frame, moved;
@@ -338,6 +360,9 @@ static const char *const ARM_JOINTS[2][3] = {{"LeftArm", "LeftForeArm", "LeftHan
 static volatile float pin_chest = 1, pin_arm_seen[PIN_ARM_SEEN];
 static float hand_held[8];
 static int hand_holding;
+static arm_hold arm_holds[2] = {{.frame = -1}, {.frame = -1}};
+static volatile LONG hold_lock, hold_latest = -1;
+static volatile float hold_seen[2];
 static const struct { const char *name; unsigned char level; } JOINT_LEVELS[] = {
     {"Hips", 0}, {"Spine", 1}, {"Spine1", 3}, {"Spine2", 5}, {"Spine3", 6}, {"Spine4", 7}, {"Neck", 4}, {"Neck1", 2}, {"Head", 0},
     {"LeftArm", PIN_LEVEL_ARM}, {"RightArm", PIN_LEVEL_ARM + PIN_LEVEL_RIGHT}, {"LeftForeArm", PIN_LEVEL_ELBOW}, {"RightForeArm", PIN_LEVEL_ELBOW + PIN_LEVEL_RIGHT},
@@ -903,6 +928,10 @@ void m4_pin_signal(int on) {
     InterlockedExchange(&pin_wanted, on);
 }
 
+int m4_pin_can_hold(void) {
+    return pin_ready && (m4_precision & PRECISION_PIN);
+}
+
 void m4_pin_ease(void) {
     pin_ease_until = sight_clock() + PIN_EASE_WINDOW_S;
 }
@@ -1389,7 +1418,7 @@ static int sight_solved(const float *m, const float *view, const float *at, cons
     }
     if (stepped)
         for (int i = 0; i < 6; i++) applied[i] = shown[i];
-    if (saddled) {
+    if (saddled || m4_aim_held()) {
         double kick = saddle_kicked(since_shot);
         applied[0] += kick * m4_saddle_lift / 100.0 / DEGREES;
         applied[4] -= kick * m4_saddle_push / 1000.0;
@@ -1620,6 +1649,8 @@ static int arm_solved(const double joints[3][3], const float *root, const float 
     for (int i = 0; i < 3; i++) {
         side[i] /= sided;
         hinge[i] /= hinged;
+    }
+    for (int i = 0; i < 3; i++) {
         upper_to[i] = along * reach[i] + out * side[i];
         elbow[i] = shoulder[i] + upper_to[i];
         lower_to[i] = (span - along) * reach[i] - out * side[i];
@@ -1629,6 +1660,113 @@ static int arm_solved(const double joints[3][3], const float *root, const float 
     bone_dual(first, upper, upper_to, bend, joints[0], shoulder, arm);
     bone_dual(first, lower, lower_to, bend, joints[1], elbow, fore);
     return 1;
+}
+
+static void dual_back(const float *d, float *out) {
+    float back[8] = {-d[0], -d[1], -d[2], d[3], -d[4], -d[5], -d[6], d[7]};
+    memcpy(out, back, sizeof(back));
+}
+
+static double dual_turn_deg(const float *d) {
+    double sine = sqrt((double)d[0] * d[0] + (double)d[1] * d[1] + (double)d[2] * d[2]);
+    return 2 * atan2(sine, fabs(d[3])) * DEGREES;
+}
+
+static double dual_step_deg(const float *from, const float *to) {
+    float step[8];
+    dual_back(from, step);
+    dual_times(to, step);
+    return dual_turn_deg(step);
+}
+
+static void dual_framed(const float *outer, const float *inner, const float *back, float *out) {
+    memcpy(out, back, 8 * sizeof(float));
+    dual_times(inner, out);
+    dual_times(outer, out);
+}
+
+static int dual_still(const float *d) {
+    static const float STILL[8] = {0, 0, 0, 1, 0, 0, 0, 0};
+    return !memcmp(d, STILL, sizeof(STILL));
+}
+
+static void hold_dual(const float *fresh, int had, int doubt, double ease, const double *pivot, float *shown, float *off) {
+    float moved[3];
+    if (had && doubt) {
+        dual_back(fresh, off);
+        dual_times(shown, off);
+    } else if (had) {
+        float decayed[8];
+        level_dual(off, pivot, ease, decayed);
+        memcpy(off, decayed, sizeof(decayed));
+    }
+    translation_of(off, moved);
+    if (!had || (dual_turn_deg(off) < HOLD_GONE_DEG && sqrt((double)moved[0] * moved[0] + (double)moved[1] * moved[1] + (double)moved[2] * moved[2]) < HOLD_GONE_M))
+        for (int i = 0; i < 8; i++) off[i] = i == 3;
+    memcpy(shown, fresh, 8 * sizeof(float));
+    if (!dual_still(off)) dual_times(off, shown);
+}
+
+static void hold_point(const double *fresh, int had, int doubt, double ease, double *shown, double *off) {
+    for (int i = 0; i < 3; i++) off[i] = !had ? 0 : doubt ? shown[i] - fresh[i] : off[i] * ease;
+    if (sqrt(dot3(off, off)) < HOLD_GONE_M) off[0] = off[1] = off[2] = 0;
+    for (int i = 0; i < 3; i++) shown[i] = fresh[i] + off[i];
+}
+
+static arm_hold *hold_of(LONG frame, const float *carry, const double *pivot, const float *back, float (*parts)[8], const pin_table *table, const arm_pose *arms) {
+    arm_hold *hold = &arm_holds[frame & 1];
+    if (hold->frame != frame) {
+        if (frame < hold_latest) return NULL;
+        const arm_hold *other = &arm_holds[(frame - 1) & 1];
+        arm_hold next = other->frame < frame && other->frame > hold->frame ? *other : *hold;
+        double now = sight_clock(), dt = now - next.at;
+        int had = next.frame >= 0 && next.frame < frame && dt >= 0 && dt <= HOLD_GAP_S, aimed = m4_aim_held() != 0;
+        float seen[8] = {0, 0, 0, 1, 0, 0, 0, 0};
+        if (arms->chested) dual_framed(back, parts[PIN_LEVEL_CHEST], arms->chest, seen);
+        double rate = had ? fmax(dual_step_deg(next.carry, carry), arms->chested && next.chest_ok ? dual_step_deg(next.seen, seen) : 0) / fmax(dt, HOLD_FRAME_S) : 0;
+        double angle = dual_turn_deg(carry);
+        next.aim_at = !had ? now - HOLD_AIM_S : aimed != next.aimed ? now : next.aim_at;
+        next.aimed = aimed;
+        int gated = aimed || now - next.aim_at < HOLD_AIM_S || pin_share_value < 1 || pin_wanted == PIN_SADDLE;
+        int doubt = had && !gated &&
+                    (angle > HOLD_DOUBT_DEG || rate > HOLD_DOUBT_DEG_S || (next.doubt && (angle > HOLD_TRUST_DEG || rate > HOLD_TRUST_DEG_S)));
+        next.follow = doubt || !had ? 0 : next.follow + dt;
+        next.ease = exp(-fmax(dt, 0) * fmin(next.follow / HOLD_BACK_S, 1) / HOLD_BACK_S);
+        next.doubt = doubt;
+        next.frame = frame;
+        next.at = now;
+        memcpy(next.carry, carry, sizeof(next.carry));
+        memcpy(next.seen, seen, sizeof(next.seen));
+        if (arms->chested) {
+            double at[3];
+            dual_apply(back, pivot, at);
+            hold_dual(seen, had && next.chest_ok, doubt, next.ease, at, next.chest, next.chest_off);
+        }
+        next.chest_ok = arms->chested;
+        next.arms_ok = had && next.arms_ok;
+        next.arms_due = 1;
+        *hold = next;
+        hold_latest = frame;
+        hold_seen[0] = doubt ? 0 : 1;
+        hold_seen[1] = next.chest_ok ? (float)dual_turn_deg(next.chest_off) : 0;
+    }
+    if (hold->arms_due && table->arms) {
+        double wrist[3], at[3];
+        float hand[8];
+        dual_framed(back, parts[PIN_LEVEL_LEFT_HAND], arms->left_hand, hand);
+        dual_apply(parts[PIN_LEVEL_LEFT_HAND], arms->at[0][2], wrist);
+        dual_apply(back, wrist, at);
+        hold_dual(hand, hold->arms_ok, hold->doubt, hold->ease, at, hold->hand, hold->hand_off);
+        for (int side = 0; side < 2; side++) {
+            double elbow[3];
+            dual_apply(parts[PIN_LEVEL_ELBOW + side * PIN_LEVEL_RIGHT], arms->at[side][1], elbow);
+            dual_apply(back, elbow, at);
+            hold_point(at, hold->arms_ok, hold->doubt, hold->ease, hold->pole[side], hold->pole_off[side]);
+        }
+        hold->arms_ok = 1;
+        hold->arms_due = 0;
+    }
+    return hold;
 }
 
 static int arm_true(const pin_table *table, int side, const double joints[3][3]) {
@@ -1665,7 +1803,9 @@ static void hand_hold(const float *gun, int carried, arm_pose *arms) {
     arms->hold = (float)weight;
 }
 
-static void level_parts(const float *carry, const double *pivot, const float *gun, const pin_table *table, const arm_pose *arms, float (*parts)[8]) {
+static void level_parts(const float *carry, const double *pivot, const float *gun, const pin_table *table, const arm_pose *arms, LONG frame,
+                        float (*parts)[8]) {
+    float pinned[8], back[8], bent[2][8];
     for (int k = 0; k < PIN_LEVELS; k++) level_dual(carry, pivot, level_share(k), parts[k]);
     if (table->arms && arms->hold > 0) {
         float slid[8], part[8];
@@ -1674,10 +1814,39 @@ static void level_parts(const float *carry, const double *pivot, const float *gu
         dual_times(parts[PIN_LEVEL_LEFT_HAND], part);
         memcpy(parts[PIN_LEVEL_LEFT_HAND], part, sizeof(part));
     }
+    memcpy(pinned, gun, sizeof(pinned));
+    dual_times(carry, pinned);
+    dual_back(pinned, back);
+    for (int side = 0; side < 2; side++) memcpy(bent[side], parts[PIN_LEVEL_ELBOW + side * PIN_LEVEL_RIGHT], sizeof(bent[side]));
+    while (InterlockedCompareExchange(&hold_lock, 1, 0)) YieldProcessor();
+    const arm_hold *hold = hold_of(frame, carry, pivot, back, parts, table, arms);
+    if (hold && hold->chest_ok && !dual_still(hold->chest_off)) {
+        float chest[8];
+        dual_framed(pinned, hold->chest_off, back, chest);
+        dual_times(chest, parts[PIN_LEVEL_CHEST]);
+        for (int k = 1; k < PIN_LEVEL_CHEST; k++) level_dual(parts[PIN_LEVEL_CHEST], pivot, LEVEL_SHARES[k], parts[k]);
+    }
+    if (hold && hold->arms_ok && table->arms) {
+        double q[4] = {pinned[0], pinned[1], pinned[2], pinned[3]}, still[4] = {0, 0, 0, 1};
+        if (!dual_still(hold->hand_off)) {
+            float hand[8];
+            dual_framed(pinned, hold->hand_off, back, hand);
+            dual_times(hand, parts[PIN_LEVEL_LEFT_HAND]);
+        }
+        for (int side = 0; side < 2; side++) {
+            double moved[3];
+            float shift[8];
+            rotate(q, hold->pole_off[side], moved);
+            dual_of(still, moved, shift);
+            dual_times(shift, bent[side]);
+        }
+    }
+    InterlockedExchange(&hold_lock, 0);
     for (int side = 0; table->arms && side < 2; side++) {
         int level = PIN_LEVEL_ARM + side * PIN_LEVEL_RIGHT;
         float solved[2][8];
-        int solves = arm_true(table, side, arms->at[side]) && arm_solved(arms->at[side], parts[table->arm_root[side]], parts[level + 1], parts[side ? PIN_LEVEL_HAND : PIN_LEVEL_LEFT_HAND], solved[0], solved[1]);
+        int solves = arm_true(table, side, arms->at[side]) &&
+                     arm_solved(arms->at[side], parts[table->arm_root[side]], bent[side], parts[side ? PIN_LEVEL_HAND : PIN_LEVEL_LEFT_HAND], solved[0], solved[1]);
         if (solves) memcpy(parts[level], solved, sizeof(solved));
         InterlockedIncrement(solves ? &pin_arms_solved : &pin_arms_loose);
     }
@@ -1685,14 +1854,19 @@ static void level_parts(const float *carry, const double *pivot, const float *gu
 
 static void arms_posed(const pin_table *table, const float *quat, arm_pose *arms) {
     memset(arms, 0, sizeof(*arms));
+    if (table && table->chest_joint >= 0) {
+        memcpy(arms->chest, quat + 8 * table->chest_joint, sizeof(arms->chest));
+        arms->chested = 1;
+    }
     for (int side = 0; table && table->arms && side < 2; side++)
         for (int part = 0; part < 3; part++) dual_apply(quat + 8 * table->arm_joint[side][part], table->arm_bind[side][part], arms->at[side][part]);
     if (table && table->arms) memcpy(arms->left_hand, quat + 8 * table->arm_joint[0][2], sizeof(arms->left_hand));
 }
 
-static void arm_noted(const float *gun, const arm_pose *arms, float (*parts)[8]) {
-    double elbow[3], wrist[3], slide = 0, turned = 0;
+static void arm_noted(const float *gun, const pin_table *table, const arm_pose *arms, const double *pivot, float (*parts)[8]) {
+    double elbow[3], shoulder[3], wrist[3], slide = 0, turned = 0;
     dual_apply(parts[PIN_LEVEL_ELBOW], arms->at[0][1], elbow);
+    dual_apply(parts[table->arm_root[0]], arms->at[0][0], shoulder);
     if (arms->hold > 0) {
         float slid[8];
         hand_slid(gun, arms, slid);
@@ -1703,7 +1877,13 @@ static void arm_noted(const float *gun, const arm_pose *arms, float (*parts)[8])
     pin_arm_seen[0] = arms->hold;
     pin_arm_seen[1] = (float)(sqrt(slide) * 1000);
     pin_arm_seen[2] = (float)turned;
-    for (int i = 0; i < 3; i++) pin_arm_seen[3 + i] = (float)(elbow[i] * 1000);
+    for (int i = 0; i < 3; i++) {
+        pin_arm_seen[3 + i] = (float)(elbow[i] * 1000);
+        pin_arm_seen[6 + i] = (float)(shoulder[i] * 1000);
+        pin_arm_seen[9 + i] = (float)(pivot[i] * 1000);
+    }
+    pin_arm_seen[12] = hold_seen[0];
+    pin_arm_seen[13] = hold_seen[1];
 }
 
 static int joint_under(const short *parents, int joint, int above) {
@@ -1734,7 +1914,7 @@ static int pin_arms(pin_table *table, void *skeleton, const short *parents) {
     return 1;
 }
 
-static int pin_table_build(pin_table *table, void *skeleton, UINT32 joints) {
+static const char *pin_table_build(pin_table *table, void *skeleton, UINT32 joints) {
     static short parents[MAX_SHIFTED_JOINTS];
     void **slots = *(void ***)skeleton;
     if (slots[SKELETON_PARENT_SLOT] != pin_parent_fn || slots[SKELETON_NAME_SLOT] != pin_name_fn) note("pin: this skeleton has its own parent or name function");
@@ -1742,25 +1922,30 @@ static int pin_table_build(pin_table *table, void *skeleton, UINT32 joints) {
     const char *(*name_of)(void *, int) = (const char *(*)(void *, int))slots[SKELETON_NAME_SLOT];
     int hips = -1, spine = -1, hand = -1;
     memset(table->arm_joint, -1, sizeof(table->arm_joint));
+    table->chest_joint = -1;
     table->arms = 0;
+    const char *root = joints ? name_of(skeleton, 0) : NULL;
+    snprintf(table->root, sizeof(table->root), "%s", root ? root : "?");
     for (UINT32 j = 0; j < joints; j++) {
         short parent = (short)parent_of(skeleton, (int)j);
         const char *name = name_of(skeleton, (int)j);
-        if (parent >= (int)j || !name) return 0;
+        if (parent >= (int)j) return "a parent comes after its child";
+        if (!name) return "a joint has no name";
         parents[j] = parent;
         table->level[j] = parent >= 0 ? table->level[parent] : 0;
         for (size_t n = 0; n < sizeof(JOINT_LEVELS) / sizeof(JOINT_LEVELS[0]); n++)
             if (!strcmp(name, JOINT_LEVELS[n].name)) table->level[j] = JOINT_LEVELS[n].level;
         if (!strcmp(name, "Hips")) hips = (int)j;
-        if (!strcmp(name, "Spine4")) spine = (int)j;
+        if (!strcmp(name, "Spine4")) spine = table->chest_joint = (short)j;
         if (!strcmp(name, "RightHand")) hand = (int)j;
         for (int side = 0; side < 2; side++)
             for (int part = 0; part < 3; part++)
                 if (!strcmp(name, ARM_JOINTS[side][part])) table->arm_joint[side][part] = (short)j;
     }
-    if (!(hips >= 0 && spine >= 0 && hand >= 0 && joint_under(parents, hand, spine) && joint_under(parents, spine, hips))) return 0;
+    if (!(hips >= 0 && spine >= 0 && hand >= 0)) return "no Hips, Spine4 or RightHand";
+    if (!(joint_under(parents, hand, spine) && joint_under(parents, spine, hips))) return "RightHand does not hang off Spine4 and Hips";
     table->arms = pin_arms(table, skeleton, parents);
-    return 1;
+    return NULL;
 }
 
 static const pin_table *pin_table_of(void *skeleton, UINT32 joints) {
@@ -1773,20 +1958,22 @@ static const pin_table *pin_table_of(void *skeleton, UINT32 joints) {
         table = &pin_tables[pin_tables_next++ % PIN_TABLES];
         table->skeleton = skeleton;
         table->joints = joints;
-        table->ok = pin_table_build(table, skeleton, joints);
+        table->why = pin_table_build(table, skeleton, joints);
+        table->ok = !table->why;
     }
     int ok = table->ok, arms = table->arms;
     InterlockedExchange(&sight_lock, 0);
     if (fresh) {
-        char line[160];
-        snprintf(line, sizeof(line), "pin: body skeleton %p has %u joints, %s", skeleton, joints,
-                 !ok ? "names or parents refused, the pin stays off" : arms ? "levels ready, arms solved to the hands" : "levels ready, arms follow by shares");
+        char line[256];
+        if (ok)
+            snprintf(line, sizeof(line), "pin: body skeleton %p has %u joints, %s", skeleton, joints,
+                     arms ? "levels ready, arms solved to the hands" : "levels ready, arms follow by shares");
+        else
+            snprintf(line, sizeof(line), "pin: body skeleton %p has %u joints from %s, refused: %s; that skin stays as posed and the pin runs on",
+                     skeleton, joints, table->root, table->why);
         note(line);
     }
-    if (!ok) {
-        InterlockedExchange(&pin_ready, 0);
-        InterlockedIncrement(&pin_refused);
-    }
+    if (!ok) InterlockedIncrement(&pin_refused);
     return ok ? table : NULL;
 }
 
@@ -1994,8 +2181,8 @@ static void refix_body(owed_body *owed) {
     }
     if (leveled || owed->leveled) {
         float fixes[PIN_LEVELS][8], from[PIN_LEVELS][8], to[PIN_LEVELS][8];
-        if (owed->leveled) level_parts(owed->carry, owed->pivot, owed->gun, owed->table, &owed->arms, from);
-        if (leveled) level_parts(fresh, pivot, gun, owed->table, &owed->arms, to);
+        if (owed->leveled) level_parts(owed->carry, owed->pivot, owed->gun, owed->table, &owed->arms, owed->frame, from);
+        if (leveled) level_parts(fresh, pivot, gun, owed->table, &owed->arms, owed->frame, to);
         for (int k = 0; k < PIN_LEVELS; k++) refix_dual(leveled ? to[k] : fresh, owed->leveled ? from[k] : owed->carry, owed->shift, fixes[k]);
         for (UINT32 j = 0; j < owed->joints; j++) dual_times(fixes[owed->table->level[j]], owed->quat + 8 * j);
     } else {
@@ -2088,8 +2275,8 @@ static void skinning_computed(unsigned char *context, const unsigned char *skinn
     if (table && table->arms) hand_hold(held_gun, carried && leveled, &arms);
     if (carried && leveled && table) {
         float parts[PIN_LEVELS][8];
-        level_parts(carry, pivot, held_gun, table, &arms, parts);
-        if (table->arms) arm_noted(held_gun, &arms, parts);
+        level_parts(carry, pivot, held_gun, table, &arms, camera_frame, parts);
+        if (table->arms) arm_noted(held_gun, table, &arms, pivot, parts);
         for (UINT32 j = 0; j < joints; j++)
             if (table->level[j]) dual_times(parts[table->level[j]], quat + 8 * j);
         InterlockedIncrement(&pin_level_skins);
@@ -2272,6 +2459,8 @@ static void report(void) {
     memcpy(traces, sight_traces, sizeof(traces[0]) * traced);
     sight_traced = 0;
     InterlockedExchange(&sight_lock, 0);
+    static int trace_reports;
+    if (traced && trace_reports++ >= SIGHT_TRACE_REPORTS) traced = 0;
     for (LONG i = 0; i < traced; i += 6) {
         char trace[1024];
         int used = snprintf(trace, sizeof(trace),

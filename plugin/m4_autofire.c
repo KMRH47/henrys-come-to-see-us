@@ -6,11 +6,10 @@
 #include <mmsystem.h>
 #include "m4_cadence.h"
 #include "m4_hip.h"
+#include "m4_recoil.h"
 
 
 #define LOG_POLL_MS 10
-#define RECOIL_STEP_MS 4
-#define RECOIL_MAX_ACTIVE 8
 #define ARMED_PREFIX "M4CARBINE auto armed "
 #define AIM_PREFIX "M4CARBINE auto aim "
 #define RECHARGE_PREFIX "M4CARBINE auto recharge "
@@ -24,12 +23,14 @@
 
 static volatile LONG REPEAT_PERIOD_MS = 60;
 static volatile LONG RELEASE_GAP_MS = 8;
-static volatile LONG RECOIL_KICK = 34;
-static volatile LONG RECOIL_RECOVER_PERCENT = 53;
-static volatile LONG RECOIL_RISE_MS = 40;
-static volatile LONG RECOIL_FALL_MS = 200;
-static volatile LONG RECOIL_SPREAD = 2;
-static volatile LONG RECOIL_FOLLOW_PERCENT = 20;
+static volatile LONG RECOIL_CAMERA_PERCENT = 250;
+static volatile LONG RECOIL_SHAKE_PERCENT = 15;
+static volatile LONG RECOIL_COUNTS_PER_DEGREE_HUNDREDTHS = 2273;
+static volatile LONG RECOIL_CYCLE_MS = 73;
+static volatile LONG RECOIL_SETTLE_PER_S = 1100;
+static volatile LONG RECOIL_CEILING_TENTHS = 3600;
+static volatile LONG RECOIL_BULLET_PERCENT = 250;
+static volatile LONG RECOIL_CONE_PERCENT = 30;
 static volatile LONG SHOT_VOLUME_PERCENT = 50;
 static volatile LONG SELECTOR_KEY = 'H';
 
@@ -146,36 +147,73 @@ int m4_view_pitch(double *pitch);
 static HANDLE own_timer(void);
 static void wait_until(HANDLE timer, double deadline);
 
-static struct { double start; double sideways; double kick; double recover; double rise; double fall; } kicks[RECOIL_MAX_ACTIVE];
-static int kick_count;
+static recoil_state recoil;
 static CRITICAL_SECTION kick_lock;
 static HANDLE recoil_wake;
 
-static int wobble(void) {
-    static unsigned seed = 1;
-    seed = seed * 1103515245 + 12345;
-    return (int)((seed >> 16) % (2 * RECOIL_SPREAD + 1)) - RECOIL_SPREAD;
+static recoil_tuning live_tuning(void) {
+    recoil_tuning t = RECOIL_CS_TUNING;
+    t.camera_scale = RECOIL_CAMERA_PERCENT / 100.0;
+    t.shake_scale = RECOIL_SHAKE_PERCENT / 100.0;
+    t.counts_per_degree = RECOIL_COUNTS_PER_DEGREE_HUNDREDTHS / 100.0;
+    t.cycle_ms = RECOIL_CYCLE_MS;
+    t.settle_deg_s = RECOIL_SETTLE_PER_S / t.counts_per_degree;
+    t.ceiling_deg = RECOIL_CEILING_TENTHS / 10.0;
+    t.bullet_scale = RECOIL_BULLET_PERCENT / 100.0;
+    t.inaccuracy_scale = RECOIL_CONE_PERCENT / 100.0;
+    return t;
+}
+
+#define RECOIL_OFFSETS 8
+#define RECOIL_OFFSET_FRESH_MS 300
+static struct { double at, up, right; } offsets[RECOIL_OFFSETS];
+static int offset_first, offset_count;
+
+int m4_recoil_take_offset(double *up, double *right) {
+    double now = milliseconds();
+    int found = 0;
+    EnterCriticalSection(&kick_lock);
+    while (offset_count && !found) {
+        int i = offset_first;
+        offset_first = (offset_first + 1) % RECOIL_OFFSETS;
+        offset_count--;
+        if (now - offsets[i].at > RECOIL_OFFSET_FRESH_MS) continue;
+        *up = offsets[i].up;
+        *right = offsets[i].right;
+        found = 1;
+    }
+    LeaveCriticalSection(&kick_lock);
+    return found;
 }
 
 static void kick(void) {
     if (!recoil_on) return;
+    recoil_tuning t = live_tuning();
+    double now = milliseconds(), pitch = 0;
+    int pitched = m4_view_pitch(&pitch);
     EnterCriticalSection(&kick_lock);
-    if (kick_count < RECOIL_MAX_ACTIVE) {
-        kicks[kick_count].start = milliseconds();
-        kicks[kick_count].sideways = wobble();
-        kicks[kick_count].kick = RECOIL_KICK;
-        kicks[kick_count].recover = RECOIL_RECOVER_PERCENT;
-        kicks[kick_count].rise = RECOIL_RISE_MS;
-        kicks[kick_count].fall = RECOIL_FALL_MS;
-        kick_count++;
+    recoil_angle bullet = recoil_fire(&recoil, &t, now, pitched, pitch);
+    if (offset_count == RECOIL_OFFSETS) {
+        offset_first = (offset_first + 1) % RECOIL_OFFSETS;
+        offset_count--;
     }
+    int slot = (offset_first + offset_count++) % RECOIL_OFFSETS;
+    offsets[slot].at = now;
+    offsets[slot].up = -bullet.pitch;
+    offsets[slot].right = -bullet.yaw;
     LeaveCriticalSection(&kick_lock);
     SetEvent(recoil_wake);
 }
 
+static volatile LONG player_dy, injected_dy;
+
 static LRESULT CALLBACK track_physical_button(int code, WPARAM message, LPARAM data) {
     if (code == HC_ACTION) {
         MSLLHOOKSTRUCT *event = (MSLLHOOKSTRUCT *)data;
+        if (message == WM_MOUSEMOVE) {
+            POINT at;
+            if (GetCursorPos(&at)) InterlockedExchangeAdd(event->flags & LLMHF_INJECTED ? &injected_dy : &player_dy, event->pt.y - at.y);
+        }
         if (!(event->flags & LLMHF_INJECTED) && message == WM_RBUTTONDOWN) {
             InterlockedExchange(&physical_aim, 1);
             if (armed) aim_pressed_at = milliseconds();
@@ -207,11 +245,14 @@ static int game_in_front(void) {
     return process == GetCurrentProcessId();
 }
 
+int m4_sight_key_route(unsigned vk, int down, int (*in_front)(void));
+
 static LRESULT CALLBACK track_selector_key(int code, WPARAM message, LPARAM data) {
     static int held;
     KBDLLHOOKSTRUCT *event = (KBDLLHOOKSTRUCT *)data;
+    int down = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
+    if (code == HC_ACTION && !(event->flags & LLKHF_INJECTED) && m4_sight_key_route(event->vkCode, down, game_in_front)) return 1;
     if (code == HC_ACTION && !(event->flags & LLKHF_INJECTED) && (LONG)event->vkCode == SELECTOR_KEY) {
-        int down = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
         if (down && !held && armed && game_in_front()) {
             char line[64];
             snprintf(line, sizeof(line), "selector: key pressed, press %ld", (long)InterlockedIncrement(&m4_selector_presses));
@@ -262,7 +303,13 @@ int m4_mag_empty(void) {
 
 static void apply_newest_flags(const char *text) {
     long rounds = newest_number(text, MAG_PREFIX);
-    if (rounds >= 0 && InterlockedExchange(&mag_left, rounds) != rounds) {
+    LONG before = rounds >= 0 ? InterlockedExchange(&mag_left, rounds) : rounds;
+    if (rounds >= 0 && before != rounds) {
+        if (before >= 0 && rounds > before) {
+            EnterCriticalSection(&kick_lock);
+            recoil_reset_index(&recoil);
+            LeaveCriticalSection(&kick_lock);
+        }
         char line[64];
         snprintf(line, sizeof(line), "mag: %ld rounds", rounds);
         note(line);
@@ -305,9 +352,8 @@ static void apply_newest_flags(const char *text) {
 
 static void apply_setting(const char *name, long value) {
     struct { const char *name; volatile LONG *slot; } table[] = {
-        {"period", &REPEAT_PERIOD_MS}, {"gap", &RELEASE_GAP_MS}, {"kick", &RECOIL_KICK},
-        {"recover", &RECOIL_RECOVER_PERCENT}, {"rise", &RECOIL_RISE_MS},
-        {"fall", &RECOIL_FALL_MS}, {"spread", &RECOIL_SPREAD}, {"follow", &RECOIL_FOLLOW_PERCENT}, {"volume", &SHOT_VOLUME_PERCENT},
+        {"period", &REPEAT_PERIOD_MS}, {"gap", &RELEASE_GAP_MS}, {"recoil", &RECOIL_CAMERA_PERCENT},
+        {"shake", &RECOIL_SHAKE_PERCENT}, {"cpd", &RECOIL_COUNTS_PER_DEGREE_HUNDREDTHS}, {"cycle", &RECOIL_CYCLE_MS}, {"settle", &RECOIL_SETTLE_PER_S}, {"ceiling", &RECOIL_CEILING_TENTHS}, {"bullet", &RECOIL_BULLET_PERCENT}, {"cone", &RECOIL_CONE_PERCENT}, {"volume", &SHOT_VOLUME_PERCENT},
         {"precision", &m4_precision}, {"lift", &m4_saddle_lift}, {"push", &m4_saddle_push},
         {"ease", &m4_saddle_ease}, {"rate", &m4_saddle_rate},
         {"damage", &m4_damage_fixed}, {"attack", &m4_attack_hundredths},
@@ -338,9 +384,9 @@ static DWORD WINAPI follow_settings(LPVOID unused) {
                 while (fgets(line, sizeof(line), settings))
                     if (sscanf(line, "%63[a-z]=%ld", name, &value) == 2) apply_setting(name, value);
                 fclose(settings);
-                snprintf(line, sizeof(line), "settings period %ld gap %ld kick %ld recover %ld rise %ld fall %ld spread %ld follow %ld volume %ld precision %ld lift %ld push %ld ease %ld rate %ld damage %ld attack %ld near %ld far %ld floor %ld selector %ld",
-                         (long)REPEAT_PERIOD_MS, (long)RELEASE_GAP_MS, (long)RECOIL_KICK,
-                         (long)RECOIL_RECOVER_PERCENT, (long)RECOIL_RISE_MS, (long)RECOIL_FALL_MS, (long)RECOIL_SPREAD, (long)RECOIL_FOLLOW_PERCENT,
+                snprintf(line, sizeof(line), "settings period %ld gap %ld recoil %ld shake %ld cpd %ld cycle %ld settle %ld ceiling %ld bullet %ld cone %ld volume %ld precision %ld lift %ld push %ld ease %ld rate %ld damage %ld attack %ld near %ld far %ld floor %ld selector %ld",
+                         (long)REPEAT_PERIOD_MS, (long)RELEASE_GAP_MS, (long)RECOIL_CAMERA_PERCENT,
+                         (long)RECOIL_SHAKE_PERCENT, (long)RECOIL_COUNTS_PER_DEGREE_HUNDREDTHS, (long)RECOIL_CYCLE_MS, (long)RECOIL_SETTLE_PER_S, (long)RECOIL_CEILING_TENTHS, (long)RECOIL_BULLET_PERCENT, (long)RECOIL_CONE_PERCENT,
                          (long)SHOT_VOLUME_PERCENT, (long)m4_precision, (long)m4_saddle_lift, (long)m4_saddle_push, (long)m4_saddle_ease, (long)m4_saddle_rate,
                          (long)m4_damage_fixed, (long)m4_attack_hundredths, (long)m4_armour_near, (long)m4_armour_far, (long)m4_armour_floor, (long)SELECTOR_KEY);
                 note(line);
@@ -428,88 +474,82 @@ static void wait_until(HANDLE timer, double deadline) {
     if (SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) WaitForSingleObject(timer, INFINITE);
 }
 
-static double kick_offset(int index, double age, double *sideways_share) {
-    double peak = -kicks[index].kick;
-    double kept = peak * (100.0 - kicks[index].recover) / 100.0;
-    double rise = kicks[index].rise, fall = kicks[index].fall;
-    if (age < rise) {
-        *sideways_share = age / rise;
-        return peak * age / rise;
+static void note_burst_end(const recoil_state *ended, double started_at) {
+    char line[160];
+    snprintf(line, sizeof(line), "recoil: %d shots, settled %.0f ms after the first, recoil index %.1f, %s", ended->shots,
+             milliseconds() - started_at, ended->index,
+             !ended->home_known ? "no view pitch, full return" : ended->stopped_at_home ? "return stopped at the start pitch" : "full return");
+    note(line);
+}
+
+#define TRACE_ROWS 4096
+#define TRACE_BURSTS 12
+
+typedef struct {
+    float at, pitch, sent, budget, floor, anchor;
+    int pitched, lag, released, shots, sent_dy, player_dy, injected_dy;
+} trace_row;
+
+static trace_row trace_rows[TRACE_ROWS];
+static int trace_count;
+static int traced_bursts;
+
+static void trace_step(const recoil_state *s, double since, int pitched, double pitch, int move_up) {
+    if (trace_count >= TRACE_ROWS || traced_bursts >= TRACE_BURSTS) return;
+    trace_rows[trace_count++] = (trace_row){(float)since, (float)pitch, (float)s->sent_up, (float)s->budget, (float)s->hand_floor,
+                                            (float)s->hand_anchor, pitched, s->lag_steps, s->released, s->shots, move_up,
+                                            InterlockedExchange(&player_dy, 0), InterlockedExchange(&injected_dy, 0)};
+}
+
+static void trace_dump(void) {
+    if (!trace || traced_bursts >= TRACE_BURSTS || !trace_count) return;
+    traced_bursts++;
+    fprintf(trace, "rtrace begin %d rows: ms pitched pitch sent budget floor anchor lag released shots sent_dy player_dy injected_dy\n", trace_count);
+    for (int i = 0; i < trace_count; i++) {
+        const trace_row *r = &trace_rows[i];
+        fprintf(trace, "rtrace %.1f %d %.3f %.3f %.3f %.3f %.3f %d %d %d %d %d %d\n", r->at, r->pitched, r->pitch, r->sent, r->budget, r->floor,
+                r->anchor, r->lag, r->released, r->shots, r->sent_dy, r->player_dy, r->injected_dy);
     }
-    *sideways_share = 1.0;
-    if (age < rise + fall) return peak + (kept - peak) * (age - rise) / fall;
-    return kept;
+    fprintf(trace, "rtrace end\n");
+    fflush(trace);
+    trace_count = 0;
 }
 
 static DWORD WINAPI apply_recoil(LPVOID unused) {
     (void)unused;
     HANDLE timer = own_timer();
-    double settled_up = 0, settled_side = 0, applied_up = 0, applied_side = 0, home_pitch = 0, pitch, held_back = 0, follow_owed = 0;
-    double last = 0;
-    int idle = 1, home = 0;
+    double started_at = 0;
+    int was_busy = 0;
     for (;;) {
+        double now = milliseconds();
+        int move_side = 0, move_up = 0;
+        recoil_tuning t = live_tuning();
+        double pitch = 0;
+        int pitched = m4_view_pitch(&pitch);
         EnterCriticalSection(&kick_lock);
-        int active = kick_count;
-        LeaveCriticalSection(&kick_lock);
-        if (!active && settled_up == 0) {
-            if (!idle) {
-                char line[160];
-                if (home && m4_view_pitch(&pitch))
-                    snprintf(line, sizeof(line), "recoil: burst from pitch %.2f ended at %.2f, held back %.0f counts", home_pitch, pitch,
-                             held_back);
-                else
-                    snprintf(line, sizeof(line), "recoil: burst without a view pitch, full return");
-                note(line);
+        recoil_step(&recoil, &t, now, pitched, pitch, &move_side, &move_up);
+        int busy = !recoil.idle;
+        if (busy) {
+            if (!was_busy) {
+                trace_count = 0;
+                InterlockedExchange(&player_dy, 0);
+                InterlockedExchange(&injected_dy, 0);
             }
-            applied_up = applied_side = settled_up = settled_side = held_back = follow_owed = 0;
-            idle = 1;
+            trace_step(&recoil, was_busy ? now - started_at : 0, pitched, pitch, move_up);
+        }
+        recoil_state ended = recoil;
+        if (!busy) recoil.shots = 0;
+        LeaveCriticalSection(&kick_lock);
+        if (move_up || move_side) send_move(move_side, move_up);
+        if (busy && !was_busy) started_at = now;
+        if (!busy && was_busy) {
+            note_burst_end(&ended, started_at);
+            trace_dump();
+        }
+        was_busy = busy;
+        if (!busy) {
             WaitForSingleObject(recoil_wake, INFINITE);
             continue;
-        }
-        double now = milliseconds();
-        if (idle) {
-            idle = 0;
-            home = m4_view_pitch(&home_pitch);
-            last = now;
-        }
-        double wanted_up = 0, wanted_side = 0;
-        EnterCriticalSection(&kick_lock);
-        int kept = 0;
-        for (int i = 0; i < kick_count; ++i) {
-            double age = now - kicks[i].start, share;
-            double offset = kick_offset(i, age, &share);
-            if (age >= kicks[i].rise + kicks[i].fall) {
-                settled_up += offset;
-                settled_side += kicks[i].sideways;
-                continue;
-            }
-            wanted_up += offset;
-            wanted_side += kicks[i].sideways * share;
-            kicks[kept++] = kicks[i];
-        }
-        kick_count = kept;
-        LeaveCriticalSection(&kick_lock);
-        if (!physical_down && settled_up != 0) {
-            double share = (now - last) / RECOIL_FALL_MS;
-            settled_up = settled_up > -0.5 || share >= 1 ? 0 : settled_up * (1 - share);
-        }
-        last = now;
-        wanted_up += settled_up;
-        wanted_side += settled_side;
-        int step_up = (int)((wanted_up - applied_up) + ((wanted_up > applied_up) ? 0.5 : -0.5));
-        int step_side = (int)((wanted_side - applied_side) + ((wanted_side > applied_side) ? 0.5 : -0.5));
-        if (step_up > 0 && home && m4_view_pitch(&pitch) && pitch <= home_pitch) {
-            follow_owed += step_up * RECOIL_FOLLOW_PERCENT / 100.0;
-            int follow = (int)follow_owed;
-            follow_owed -= follow;
-            applied_up += step_up - follow;
-            held_back += step_up - follow;
-            step_up = follow;
-        }
-        if (step_up || step_side) {
-            send_move(step_side, step_up);
-            applied_up += step_up;
-            applied_side += step_side;
         }
         wait_until(timer, now + RECOIL_STEP_MS);
     }
@@ -657,6 +697,7 @@ static DWORD WINAPI start(LPVOID unused) {
     engage = CreateEventW(NULL, FALSE, FALSE, NULL);
     recoil_wake = CreateEventW(NULL, FALSE, FALSE, NULL);
     InitializeCriticalSection(&kick_lock);
+    recoil_init(&recoil, &RECOIL_M4A4);
     note("m4_autofire loaded");
     CreateThread(NULL, 0, hook_thread, NULL, 0, NULL);
     CreateThread(NULL, 0, follow_game_log, NULL, 0, NULL);

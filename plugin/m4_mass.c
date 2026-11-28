@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -10,6 +11,7 @@ double m4_since_shot_ms(void);
 unsigned char *near_page(unsigned char *base);
 unsigned char *emit_jump(unsigned char *at, void *target);
 void put_call(unsigned char *from, unsigned char *to, size_t length);
+int m4_recoil_take_offset(double *up, double *right);
 
 #define LAUNCH_RVA 0x2aad50c
 #define PARTICLE_PARAMS_RVA 0xb35050
@@ -20,6 +22,8 @@ void put_call(unsigned char *from, unsigned char *to, size_t length);
 #define M4_ROUND_MASS 0.01f
 #define M4_LAUNCH_WINDOW_MS 1500
 #define LOGGED_LAUNCHES 4
+#define RECOIL_LAUNCH_WINDOW_MS 300
+#define LOGGED_RECOIL 6
 
 static const unsigned int LAUNCH_CALLS[] = {0x2aa8901, 0x2aad4ff, 0x2acdab0};
 static const unsigned char LAUNCH_BYTES[] = {
@@ -28,9 +32,35 @@ static const unsigned char LAUNCH_BYTES[] = {
 
 void *m4_launch_original;
 static void *(*particle_params)(unsigned char *);
-static volatile LONG logged;
+static volatile LONG logged, logged_recoil;
+static float recoil_velocity[3];
 
-void m4_round_launch(void **entity, int thread, float speed) {
+static void recoil_aim(const float **velocity_slot, double since) {
+    double up, right;
+    if (since >= RECOIL_LAUNCH_WINDOW_MS || !m4_recoil_take_offset(&up, &right)) return;
+    const float *v = *velocity_slot;
+    float speed = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    if (speed < 1e-4f) return;
+    float way[3] = {v[0] / speed, v[1] / speed, v[2] / speed};
+    float side[3] = {way[1], -way[0], 0}, length = sqrtf(side[0] * side[0] + side[1] * side[1]);
+    if (length < 1e-4f) return;
+    side[0] /= length;
+    side[1] /= length;
+    float yaw = (float)(right * 0.017453292519943295), pitch = (float)(up * 0.017453292519943295), turned[3], lift[3];
+    for (int i = 0; i < 3; i++) turned[i] = way[i] * cosf(yaw) + side[i] * sinf(yaw);
+    lift[0] = side[1] * turned[2] - side[2] * turned[1];
+    lift[1] = side[2] * turned[0] - side[0] * turned[2];
+    lift[2] = side[0] * turned[1] - side[1] * turned[0];
+    for (int i = 0; i < 3; i++) recoil_velocity[i] = (turned[i] * cosf(pitch) + lift[i] * sinf(pitch)) * speed;
+    *velocity_slot = recoil_velocity;
+    if (InterlockedIncrement(&logged_recoil) <= LOGGED_RECOIL) {
+        char line[128];
+        snprintf(line, sizeof(line), "recoil: round leaves %.2f deg up, %.2f deg right of the view", up, right);
+        note(line);
+    }
+}
+
+void m4_round_launch(void **entity, int thread, float speed, const float **velocity_slot) {
     double since = m4_since_shot_ms();
     if (!entity || since >= M4_LAUNCH_WINDOW_MS) return;
     void **vtable = *(void ***)entity;
@@ -39,6 +69,7 @@ void m4_round_launch(void **entity, int thread, float speed) {
     particle_params(params);
     *(float *)(params + PARTICLE_MASS) = M4_ROUND_MASS;
     ((int (*)(void *, void *, int))vtable[PE_SET_PARAMS_SLOT])(entity, params, thread);
+    recoil_aim(velocity_slot, since);
     if (InterlockedIncrement(&logged) <= LOGGED_LAUNCHES) {
         char line[128];
         snprintf(line, sizeof(line), "mass: M4 round %.0f m/s weighs %.3f kg, %.0f ms after the shot", speed, M4_ROUND_MASS, since);
@@ -52,7 +83,7 @@ __attribute__((naked)) static void launch(void) {
         "sub $0x80, %rsp\n"
         "movdqu %xmm0, 0x20(%rsp)\n movdqu %xmm1, 0x30(%rsp)\n movdqu %xmm2, 0x40(%rsp)\n"
         "movdqu %xmm3, 0x50(%rsp)\n movdqu %xmm4, 0x60(%rsp)\n movdqu %xmm5, 0x70(%rsp)\n"
-        "mov %rdx, %rcx\n mov 0xe8(%rsp), %edx\n movaps %xmm3, %xmm2\n"
+        "mov %rdx, %rcx\n mov 0xe8(%rsp), %edx\n movaps %xmm3, %xmm2\n lea 0xa0(%rsp), %r9\n"
         "call m4_round_launch\n"
         "movdqu 0x20(%rsp), %xmm0\n movdqu 0x30(%rsp), %xmm1\n movdqu 0x40(%rsp), %xmm2\n"
         "movdqu 0x50(%rsp), %xmm3\n movdqu 0x60(%rsp), %xmm4\n movdqu 0x70(%rsp), %xmm5\n"

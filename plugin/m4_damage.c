@@ -57,6 +57,9 @@ int m4_is_ammo_record(const unsigned char *record);
 #define SIGHT_DOT_CVAR "m4_sight_dot"
 #define SIGHT_IRONS_CVAR "m4_sight_irons"
 #define SIGHT_PICK_CVAR "m4_sight_pick"
+#define SIGHT_KEYS_ON_CVAR "m4_sight_keys_on"
+#define SIGHT_KEYS_OFF_CVAR "m4_sight_keys_off"
+#define SIGHT_KEY_LINE "m4_sight_key %ld"
 #define DOLL_START_CVAR "m4_doll_start"
 #define DOLL_STOP_CVAR "m4_doll_stop"
 #define LIGHT_ON_CVAR "m4_light_on"
@@ -65,6 +68,7 @@ int m4_is_ammo_record(const unsigned char *record);
 #define PIN_OFF_CVAR "m4_pin_off"
 #define PIN_SADDLE_CVAR "m4_pin_saddle"
 #define PIN_EASE_CVAR "m4_pin_ease"
+#define PIN_HELD_CVAR "m4_pin_held"
 #define HIT_PREFIX "m4_hit "
 #define DOLL_LINE "m4_doll_tick"
 #define DOLL_TIMER 0x4d34
@@ -274,6 +278,7 @@ void m4_profile_mark(const char *step);
 #define PROFILE_MARK "m4_at_"
 void m4_ammo_console(void *console);
 void m4_pin_ease(void);
+int m4_pin_can_hold(void);
 void m4_hit_signal(double lost);
 extern volatile LONG m4_sight_picking;
 static unsigned char *(*damage_record)(void *);
@@ -406,6 +411,14 @@ static void head_register(void *console) {
     head_cvar = m4_string_cvar(console, HEAD_CVAR, HEAD_CVAR_START, "M4 head hits: sequence and world position, set by m4_autofire.asi");
 }
 
+static void pin_held_read(void *console) {
+    static void *held_cvar;
+    static volatile LONG held_registering;
+    if (!held_cvar && console && !InterlockedCompareExchange(&held_registering, 1, 0))
+        held_cvar = m4_string_cvar(console, PIN_HELD_CVAR, "0", "M4 pin: 1 while the plugin can hold the gun on the view, set by m4_autofire");
+    if (held_cvar) m4_cvar_set(held_cvar, m4_pin_can_hold() ? "1" : "0");
+}
+
 static void head_set(const char *text) {
     m4_cvar_set(head_cvar, text);
 }
@@ -450,9 +463,80 @@ static HWND doll_window;
 static WNDPROC doll_window_original;
 static int doll_timer_on;
 
+#define DOLL_PUMP_SLACK 1024
+#define DOLL_PUMP_WARMUP 10
+static uintptr_t doll_pump_top;
+static unsigned doll_pump_seen;
+static int doll_running;
+static int doll_skip_noted;
+static volatile LONG sight_keys_on, sight_key, sight_pick_held, sight_trailing;
+
+static LONG sight_pick_keys_down(void) {
+    return ((GetAsyncKeyState('E') & 0x8000) ? 1 : 0) | ((GetAsyncKeyState(VK_RETURN) & 0x8000) ? 2 : 0);
+}
+
+int m4_sight_key_route(unsigned vk, int down, int (*in_front)(void)) {
+    static const struct { unsigned vk; LONG code; } keys[] = {{'W', 1}, {VK_UP, 1}, {'S', 2}, {VK_DOWN, 2}, {'E', 3}, {VK_RETURN, 3}};
+    LONG bit = vk == 'E' ? 1 : vk == VK_RETURN ? 2 : 0;
+    if (bit && !sight_keys_on && (sight_trailing & bit)) {
+        if (!down) InterlockedAnd(&sight_trailing, ~bit);
+        return 1;
+    }
+    if (!sight_keys_on || !doll_timer_on) return 0;
+    for (size_t k = 0; k < sizeof(keys) / sizeof(keys[0]); k++) {
+        if (keys[k].vk != vk) continue;
+        if (!in_front()) return 0;
+        LONG repeat = keys[k].code == 3 && InterlockedExchange(&sight_pick_held, down) && down;
+        if (down && !repeat) InterlockedExchange(&sight_key, keys[k].code);
+        return 1;
+    }
+    return 0;
+}
+
+static void sight_keys(int on) {
+    LONG held = sight_pick_keys_down();
+    InterlockedExchange(&sight_key, 0);
+    InterlockedExchange(&sight_pick_held, on && held);
+    LONG was = InterlockedExchange(&sight_keys_on, on);
+    InterlockedExchange(&sight_trailing, !on && was ? held : 0);
+}
+
+static int doll_pump_safe(uintptr_t frame) {
+    if (frame > doll_pump_top) doll_pump_top = frame;
+    if (doll_pump_seen < DOLL_PUMP_WARMUP) {
+        doll_pump_seen++;
+        return 0;
+    }
+    return doll_pump_top - frame <= DOLL_PUMP_SLACK;
+}
+
+static void doll_tick(uintptr_t frame) {
+    if (doll_running || !doll_pump_safe(frame)) {
+        if (doll_pump_seen >= DOLL_PUMP_WARMUP && !doll_skip_noted) {
+            char line[128];
+            doll_skip_noted = 1;
+            snprintf(line, sizeof(line), "doll: skipped a timer tick %lu bytes inside another message pump%s",
+                     (unsigned long)(doll_pump_top - frame), doll_running ? " during the doll line itself" : "");
+            note(line);
+        }
+        return;
+    }
+    doll_running = 1;
+    console_execute(DOLL_LINE, 1, 0);
+    LONG key = InterlockedExchange(&sight_key, 0);
+    if (key) {
+        char line[32];
+        static int key_notes;
+        snprintf(line, sizeof(line), SIGHT_KEY_LINE, (long)key);
+        if (key_notes++ < 60) note(line);
+        console_execute(line, 1, 0);
+    }
+    doll_running = 0;
+}
+
 static LRESULT CALLBACK doll_window_proc(HWND window, UINT message, WPARAM w, LPARAM l) {
     if (message == WM_TIMER && w == DOLL_TIMER) {
-        console_execute(DOLL_LINE, 1, 0);
+        doll_tick((uintptr_t)__builtin_frame_address(0));
         return 0;
     }
     return CallWindowProcW(doll_window_original, window, message, w, l);
@@ -498,13 +582,22 @@ void *m4_console_get(void *console, const char *name) {
             doll_timer(1);
             m4_pin_signal(0);
         }
-        if (name && !strcmp(name, DOLL_STOP_CVAR)) doll_timer(0);
+        if (name && !strcmp(name, DOLL_STOP_CVAR)) {
+            doll_timer(0);
+            sight_keys(0);
+        }
+        if (name && !strcmp(name, SIGHT_KEYS_ON_CVAR)) {
+            sight_keys(1);
+            note(doll_timer_on ? "sight: W, S, Up, Down, E and Enter drive the M4 picker" : "sight: the M4 picker opened without the doll timer; its keys stay the game's");
+        }
+        if (name && !strcmp(name, SIGHT_KEYS_OFF_CVAR)) sight_keys(0);
         if (name && !strcmp(name, LIGHT_ON_CVAR)) m4_tag_light(1);
         if (name && !strcmp(name, LIGHT_OFF_CVAR)) m4_tag_light(0);
         if (name && !strcmp(name, PIN_ON_CVAR)) m4_pin_signal(1);
         if (name && !strcmp(name, PIN_OFF_CVAR)) m4_pin_signal(0);
         if (name && !strcmp(name, PIN_SADDLE_CVAR)) m4_pin_signal(2);
         if (name && !strcmp(name, PIN_EASE_CVAR)) m4_pin_ease();
+        if (name && !strcmp(name, PIN_HELD_CVAR)) pin_held_read(console);
         if (name && !strncmp(name, HIT_PREFIX, sizeof(HIT_PREFIX) - 1)) m4_hit_signal(atof(name + sizeof(HIT_PREFIX) - 1));
         m4_hip_console(console, name);
         m4_profile_console(console, name);

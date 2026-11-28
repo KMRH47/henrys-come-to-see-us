@@ -528,6 +528,8 @@ static void reset_sight(void) {
     pin_share_frame = pin_step_frame = -1;
     carry_leveled[0] = carry_leveled[1] = 0;
     memset(pin_tables, 0, sizeof(pin_tables));
+    memset(arm_holds, 0, sizeof(arm_holds));
+    arm_holds[0].frame = arm_holds[1].frame = hold_latest = -1;
     sight_depth = 0.31;
 }
 
@@ -667,6 +669,114 @@ static void hit_flinch_cases(void) {
     for (int i = 0; i < 6; i++) require(fabs(before[i] - after[i]) < 1e-9);
     hit_at = -1e12;
     hit_down_from = hit_side_from = 0;
+}
+
+typedef struct {
+    double a, r, f, h;
+} jump_pose;
+
+enum { JUMP_RUN, JUMP_UP, JUMP_SPIKE, JUMP_TURN, JUMP_PAUSE };
+static const double JUMP_PIVOT[3] = {0, 0.05, 1.62}, JUMP_GUN[3] = {0.033, 0.133, 1.581};
+static const double JUMP_SHOULDER[2][3] = {{-0.18, 0, 1.45}, {0.18, 0, 1.45}}, JUMP_WRIST[2][3] = {{-0.05, 0.42, 1.48}, {0.08, 0.2, 1.45}};
+static const double JUMP_HINT[2][3] = {{-0.5, 0, -1}, {0.5, 0, -1}}, JUMP_UPPER = 0.28, JUMP_LOWER = 0.26;
+static const double JUMP_SWING_AT[3] = {0.1, 0.1, 1.3}, JUMP_SWING[3] = {1, 0.3, 0}, JUMP_TWIST_AT[3] = {0, 0, 1.35}, JUMP_TWIST[3] = {0, 0.2, 1};
+static const double JUMP_SLIDE[3] = {0, -0.7, -0.7};
+
+static void turn_about(const double *at, const double *axis, double deg, float *out) {
+    double q[4], turn[3], spun[3], t[3], size = sqrt(dot3(axis, axis));
+    for (int i = 0; i < 3; i++) turn[i] = axis[i] / size * deg / DEGREES;
+    quat_of(turn, q);
+    rotate(q, at, spun);
+    for (int i = 0; i < 3; i++) t[i] = at[i] - spun[i];
+    dual_of(q, t, out);
+}
+
+static void elbow_between(const double *shoulder, const double *wrist, const double *hint, double deg, double *elbow) {
+    double reach[3], side[3], spun[3], turn[3], q[4], gap, along, out, lean, size;
+    for (int i = 0; i < 3; i++) reach[i] = wrist[i] - shoulder[i];
+    gap = sqrt(dot3(reach, reach));
+    for (int i = 0; i < 3; i++) reach[i] /= gap;
+    along = (JUMP_UPPER * JUMP_UPPER - JUMP_LOWER * JUMP_LOWER + gap * gap) / (2 * gap);
+    out = sqrt(fmax(JUMP_UPPER * JUMP_UPPER - along * along, 0));
+    lean = dot3(hint, reach);
+    for (int i = 0; i < 3; i++) side[i] = hint[i] - lean * reach[i];
+    size = sqrt(dot3(side, side));
+    for (int i = 0; i < 3; i++) {
+        side[i] /= size;
+        turn[i] = reach[i] * deg / DEGREES;
+    }
+    quat_of(turn, q);
+    rotate(q, side, spun);
+    for (int i = 0; i < 3; i++) elbow[i] = shoulder[i] + along * reach[i] + out * spun[i];
+}
+
+static void jump_rig(const jump_pose *pose, float *carry, float *gun, arm_pose *arms) {
+    const double still[4] = {0, 0, 0, 1};
+    double moved[3], size = sqrt(dot3(JUMP_SLIDE, JUMP_SLIDE));
+    float swing[8], twist[8], slide[8];
+    turn_about(JUMP_SWING_AT, JUMP_SWING, pose->a, swing);
+    dual_back(swing, carry);
+    dual_of(still, JUMP_GUN, gun);
+    dual_times(swing, gun);
+    turn_about(JUMP_TWIST_AT, JUMP_TWIST, pose->r, twist);
+    memset(arms, 0, sizeof(*arms));
+    memcpy(arms->chest, twist, sizeof(twist));
+    dual_times(swing, arms->chest);
+    arms->chested = 1;
+    for (int i = 0; i < 3; i++) moved[i] = JUMP_SLIDE[i] / size * pose->h;
+    dual_of(still, moved, slide);
+    memcpy(arms->left_hand, slide, sizeof(slide));
+    dual_times(swing, arms->left_hand);
+    double q[4] = {swing[0], swing[1], swing[2], swing[3]};
+    for (int side = 0; side < 2; side++) {
+        double hint[3];
+        dual_apply(arms->chest, JUMP_SHOULDER[side], arms->at[side][0]);
+        dual_apply(side ? swing : arms->left_hand, JUMP_WRIST[side], arms->at[side][2]);
+        rotate(q, JUMP_HINT[side], hint);
+        elbow_between(arms->at[side][0], arms->at[side][2], hint, side ? -pose->f : pose->f, arms->at[side][1]);
+    }
+}
+
+static void jump_plain(const float *carry, const pin_table *table, const arm_pose *arms, float (*parts)[8]) {
+    for (int k = 0; k < PIN_LEVELS; k++) level_dual(carry, JUMP_PIVOT, level_share(k), parts[k]);
+    for (int side = 0; side < 2; side++) {
+        int level = PIN_LEVEL_ARM + side * PIN_LEVEL_RIGHT;
+        float solved[2][8];
+        if (arm_solved(arms->at[side], parts[table->arm_root[side]], parts[level + 1], parts[side ? PIN_LEVEL_HAND : PIN_LEVEL_LEFT_HAND], solved[0], solved[1]))
+            memcpy(parts[level], solved, sizeof(solved));
+    }
+}
+
+static jump_pose jump_mix(jump_pose from, jump_pose to, double u) {
+    double e = 1 - pow(1 - fmin(fmax(u, 0), 1), 3);
+    return (jump_pose){from.a + e * (to.a - from.a), from.r + e * (to.r - from.r), from.f + e * (to.f - from.f), from.h + e * (to.h - from.h)};
+}
+
+static int jump_frames(int script) {
+    return script == JUMP_RUN ? 150 : script == JUMP_SPIKE ? 150 : script == JUMP_TURN ? 260 : 240;
+}
+
+static jump_pose jump_at(int script, int f, double *gap) {
+    double w = 2 * M_PI * 1.5 * f * 0.01;
+    jump_pose run = {6 + 3 * sin(w), 2 * sin(w), 4 * sin(w), 0}, air = {52 + 2 * sin(3 * w), 20, 70, 0.05}, cut = {14, 10, 30, 0};
+    *gap = script == JUMP_PAUSE && f == 70 ? 0.3 : 0;
+    if (script == JUMP_RUN || f < 30) return run;
+    if (script == JUMP_SPIKE) return f == 30 ? (jump_pose){60, 30, 90, 0.04} : run;
+    if (script == JUMP_TURN) return f < 45 ? cut : f < 65 ? jump_mix(cut, air, (f - 44) / 20.0) : f < 110 ? air : run;
+    return f < 50 ? jump_mix(run, air, (f - 29) / 20.0) : f < 95 ? air : run;
+}
+
+static double jump_step(const double *now, const double *last) {
+    double step = 0;
+    for (int i = 0; i < 3; i++) step += pow(now[i] - last[i], 2);
+    return sqrt(step);
+}
+
+static void jump_points(const arm_pose *arms, float (*parts)[8], double (*at)[3]) {
+    dual_apply(parts[PIN_LEVEL_CHEST], arms->at[0][0], at[0]);
+    dual_apply(parts[PIN_LEVEL_ELBOW], arms->at[0][1], at[1]);
+    dual_apply(parts[PIN_LEVEL_LEFT_HAND], arms->at[0][2], at[2]);
+    dual_apply(parts[PIN_LEVEL_ELBOW + PIN_LEVEL_RIGHT], arms->at[1][1], at[3]);
 }
 
 int main(void) {
@@ -1029,12 +1139,44 @@ int main(void) {
         *(void ***)fake = skeleton_slots;
         *(const joint_spec **)(fake + 8) = level_cases[c].joints;
         const pin_table *table = pin_table_of(fake, level_cases[c].count);
-        require(!table == !level_cases[c].ok && pin_ready == level_cases[c].ok);
+        require(!table == !level_cases[c].ok && pin_ready == 1);
+        const pin_table *built = NULL;
+        for (int i = 0; i < PIN_TABLES; i++)
+            if (pin_tables[i].skeleton == fake) built = &pin_tables[i];
+        require(built && (built->why == NULL) == level_cases[c].ok && !strcmp(built->root, level_cases[c].joints[0].name));
         for (UINT32 j = 0; table && j < level_cases[c].count; j++) require(LEVEL_SHARES[table->level[j]] == level_cases[c].joints[j].share);
         require(!table || table->arms == level_cases[c].arms);
         require(!level_cases[c].arms || (table->arm_root[0] == 7 && table->arm_root[1] == 7 && table->arm_joint[1][2] == 9));
         require(pin_table_of(fake, level_cases[c].count) == table);
         printf("ok   levels %s\n", level_cases[c].name);
+    }
+#define SKIN(spec) {spec, sizeof(spec) / sizeof(spec[0])}
+    static const struct {
+        const char *name;
+        struct { const joint_spec *joints; UINT32 count; } skins[3];
+    } refused_cases[] = {
+        {"a refused skin before the body leaves the pin on", {SKIN(NO_SPINE4), SKIN(FULL_BODY), SKIN(FULL_BODY)}},
+        {"a refused skin after the body leaves the pin on", {SKIN(FULL_BODY), SKIN(PARENT_AFTER_CHILD), SKIN(FULL_BODY)}},
+        {"two refused skins leave the body's levels", {SKIN(HAND_OFF_THE_SPINE), SKIN(NO_NAME), SKIN(ARMED_BODY)}},
+    };
+#undef SKIN
+    for (size_t c = 0; c < sizeof(refused_cases) / sizeof(refused_cases[0]); c++) {
+        static unsigned char fakes[3][0x10];
+        reset_sight();
+        m4_precision = PRECISION_CAMERA | PRECISION_GUN | PRECISION_SIGHT | PRECISION_FOLLOW | PRECISION_HOLD | PRECISION_PIN;
+        stance = 0;
+        pin_ready = pin_wanted = 1;
+        const pin_table *body = NULL;
+        for (int s = 0; s < 3; s++) {
+            *(void ***)fakes[s] = skeleton_slots;
+            *(const joint_spec **)(fakes[s] + 8) = refused_cases[c].skins[s].joints;
+            const pin_table *table = pin_table_of(fakes[s], refused_cases[c].skins[s].count);
+            if (s == 2) body = table;
+        }
+        require(body && pin_ready == 1);
+        fake_now += 1;
+        require(pin_share(fake_now, 0, 1) > 0);
+        printf("ok   levels %s\n", refused_cases[c].name);
     }
 
     static const struct {
@@ -1118,6 +1260,78 @@ int main(void) {
         printf("ok   arm %s\n", arm_cases[c].name);
     }
 
+    enum { JUMP_PLAIN, JUMP_SMOOTH, JUMP_RESET };
+    static const struct {
+        const char *name;
+        int script, aimed, saddle;
+        double share;
+        int expect;
+    } jump_cases[] = {
+        {"a steady run keeps the clip's arms", JUMP_RUN, 0, 0, 1, JUMP_PLAIN},
+        {"a jump from a run keeps the arms still from take-off to landing and eases back", JUMP_UP, 0, 0, 1, JUMP_SMOOTH},
+        {"a one-frame clip spike in a run moves no arm", JUMP_SPIKE, 0, 0, 1, JUMP_SMOOTH},
+        {"a jump straight out of a direction change keeps the arms still", JUMP_TURN, 0, 0, 1, JUMP_SMOOTH},
+        {"an aimed jump keeps the clip's arms", JUMP_UP, 1, 0, 1, JUMP_PLAIN},
+        {"a jump in the saddle keeps the clip's arms", JUMP_UP, 0, 1, 1, JUMP_PLAIN},
+        {"a jump while the pin fades in keeps the clip's arms", JUMP_UP, 0, 0, 0.5, JUMP_PLAIN},
+        {"a pause mid-jump starts again from the clip's arms", JUMP_PAUSE, 0, 0, 1, JUMP_RESET},
+    };
+    for (size_t c = 0; c < sizeof(jump_cases) / sizeof(jump_cases[0]); c++) {
+        pin_table table = {.arms = 1, .arm_root = {PIN_LEVEL_CHEST, PIN_LEVEL_CHEST}};
+        jump_pose rest = {0, 0, 0, 0};
+        arm_pose arms;
+        float carry[8], gun[8], parts[PIN_LEVELS][8], plain[PIN_LEVELS][8];
+        double shown[4][3], seen[4][3], last_shown[4][3], last_seen[4][3], worst = 0, worst_plain = 0;
+        int frames = jump_frames(jump_cases[c].script), plain_early = 1, held = 0, reset_ok = 1, same_ok = 1;
+        jump_rig(&rest, carry, gun, &arms);
+        memcpy(table.arm_bind, arms.at, sizeof(table.arm_bind));
+        memset(arm_holds, 0, sizeof(arm_holds));
+        arm_holds[0].frame = arm_holds[1].frame = hold_latest = -1;
+        aimed = jump_cases[c].aimed;
+        pin_wanted = jump_cases[c].saddle ? PIN_SADDLE : 1;
+        pin_share_value = jump_cases[c].share;
+        pin_chest = 1;
+        for (int f = 0; f < frames; f++) {
+            double gap;
+            jump_pose pose = jump_at(jump_cases[c].script, f, &gap);
+            fake_now += 0.01 + gap;
+            camera_frame++;
+            jump_rig(&pose, carry, gun, &arms);
+            level_parts(carry, JUMP_PIVOT, gun, &table, &arms, camera_frame, parts);
+            jump_plain(carry, &table, &arms, plain);
+            int same = !memcmp(parts, plain, sizeof(parts));
+            if (f == 70) {
+                float again[PIN_LEVELS][8], other[PIN_LEVELS][8], carry_next[8], gun_next[8];
+                arm_pose arms_next;
+                jump_pose next = jump_at(jump_cases[c].script, f + 1, &gap);
+                jump_rig(&next, carry_next, gun_next, &arms_next);
+                level_parts(carry_next, JUMP_PIVOT, gun_next, &table, &arms_next, camera_frame, other);
+                level_parts(carry, JUMP_PIVOT, gun, &table, &arms, camera_frame, again);
+                same_ok = !memcmp(parts, again, sizeof(parts));
+            }
+            jump_points(&arms, parts, shown);
+            jump_points(&arms, plain, seen);
+            if (f < 30) plain_early &= same;
+            if (f == 70 && jump_cases[c].script == JUMP_PAUSE) reset_ok = same;
+            if (f > 30 && f < 70) held |= !same;
+            for (int k = 0; f > 0 && k < 4; k++) {
+                if (!(jump_cases[c].script == JUMP_PAUSE && f == 70)) worst = fmax(worst, jump_step(shown[k], last_shown[k]));
+                worst_plain = fmax(worst_plain, jump_step(seen[k], last_seen[k]));
+            }
+            if (jump_cases[c].expect == JUMP_PLAIN) require(same);
+            if (f == frames - 1 && jump_cases[c].expect == JUMP_SMOOTH) require(same);
+            memcpy(last_shown, shown, sizeof(shown));
+            memcpy(last_seen, seen, sizeof(seen));
+        }
+        require(plain_early && same_ok);
+        if (jump_cases[c].script != JUMP_RUN) require(worst_plain > 0.03);
+        if (jump_cases[c].expect == JUMP_SMOOTH) require(held && worst < 0.006);
+        if (jump_cases[c].expect == JUMP_RESET) require(held && reset_ok && worst < 0.1 * worst_plain);
+        printf("ok   jump %s (clip arms jump %.0f mm in a frame, shown %.1f mm at most)\n", jump_cases[c].name, worst_plain * 1000, worst * 1000);
+    }
+    aimed = 1;
+    pin_wanted = 0;
+    pin_share_value = 0;
     static const struct {
         const char *name;
         double hand_turn[3], hand_move[3], gun_turn[3], gun_move[3], hold;
@@ -1167,7 +1381,7 @@ int main(void) {
         require(fabs(moved.hold - hold_cases[c].hold) < 1e-6);
         float chest = pin_chest;
         pin_chest = 0;
-        level_parts(carry, PIVOT, gun, &table, &moved, parts);
+        level_parts(carry, PIVOT, gun, &table, &moved, camera_frame, parts);
         pin_chest = chest;
         for (int i = 0; i < 3; i++) kept[i] = slid_at[i] + hold_cases[c].hold * (gone_at[i] - slid_at[i]);
         dual_apply(carry, kept, want);
@@ -1181,7 +1395,6 @@ int main(void) {
         require(!hand_holding);
         printf("ok   hand hold %s\n", hold_cases[c].name);
     }
-
     enum { PIN_HOLDS, PIN_ON_RAY, PIN_KICK, PIN_NOT_THE_GUN, PIN_OFF, PIN_LETS_GO, PIN_BACK_TO_SIGHTS, PIN_FIRST_FRAME, PIN_CARRIES };
     const struct {
         const char *name;
@@ -1244,7 +1457,7 @@ int main(void) {
             static const double GRIPS[][3] = {{0.140397154076, -0.074617902452, 0.187947916991}, {0.05, -0.2, -0.1}, {0.13, 0.01, 0.42}};
             for (size_t g = 0; g < sizeof(GRIPS) / sizeof(GRIPS[0]); g++) {
                 worst_glue = fmax(worst_glue, glue_gap(&scene, GRIPS[g], 2));
-                worst_glue = fmax(worst_glue, glue_gap(&scene, GRIPS[g], 1));
+                if (pin_cases[c].aim || pin_cases[c].swing_deg == 0) worst_glue = fmax(worst_glue, glue_gap(&scene, GRIPS[g], 1));
             }
             for (int k = 0; k < 4; k++) worst_hips = fmax(worst_hips, fabs(scene.body_quats[0][k] - raw[0][k]));
             double rear[3], line[3], upward[3];
